@@ -157,7 +157,7 @@ class OnlineManager {
     private fun connectWebSocket(roomCode: String) {
         webSocket?.close(1000, "Neuer Raum")
         val request = Request.Builder()
-            .url("https://ntfy.sh/pisti_online_$roomCode/ws")
+            .url("https://ntfy.sh/pisti_room_$roomCode/ws?since=1m")
             .build()
 
         webSocket = client.newWebSocket(request, object : WebSocketListener() {
@@ -172,7 +172,7 @@ class OnlineManager {
 
             override fun onFailure(ws: WebSocket, t: Throwable, response: Response?) {
                 Log.e("OnlineManager", "WebSocket Fehler: ${t.message}")
-                _connectionStatus.value = "Polling Aktiv"
+                _connectionStatus.value = "Fallback Active"
             }
 
             override fun onClosed(ws: WebSocket, code: Int, reason: String) {
@@ -187,7 +187,7 @@ class OnlineManager {
             while (isActive) {
                 try {
                     val req = Request.Builder()
-                        .url("https://ntfy.sh/pisti_online_$roomCode/json?poll=1")
+                        .url("https://ntfy.sh/pisti_room_$roomCode/json?since=10s")
                         .build()
                     client.newCall(req).execute().use { resp ->
                         if (resp.isSuccessful) {
@@ -202,44 +202,47 @@ class OnlineManager {
                 } catch (e: Exception) {
                     Log.e("OnlineManager", "Polling Error: ${e.message}")
                 }
-                delay(250L) // Fast 250ms polling loop for instant sync
+                delay(1200L) // Lightweight 1.2s fallback check
             }
         }
     }
 
     private fun handleIncomingMessageText(text: String) {
         try {
-            // Ntfy message wrapper check
-            val jsonToParse = if (text.contains("\"message\":")) {
+            var rawMsg = text
+            if (text.contains("\"message\":")) {
                 val mapAdapter = moshi.adapter(Map::class.java)
                 val map = mapAdapter.fromJson(text)
-                map?.get("message") as? String ?: text
-            } else {
-                text
+                val event = map?.get("event") as? String
+                if (event == "open" || event == "keepalive") return
+                rawMsg = map?.get("message") as? String ?: text
             }
 
-            val msg = messageAdapter.fromJson(jsonToParse) ?: return
+            val msg = messageAdapter.fromJson(rawMsg) ?: return
             if (msg.roomCode != activeRoomCode) return
 
             when (msg.type) {
                 "JOIN_ROOM" -> {
                     if (isHost && msg.senderId == 1) {
                         val guestName = if (msg.stateJson.isNotBlank()) msg.stateJson else "Freund"
-                        startNewOnlineGame(guestName)
+                        if (!_onlineState.value.isGameStarted) {
+                            startNewOnlineGame(guestName)
+                        }
                     }
                 }
                 "SYNC_STATE" -> {
                     if (msg.senderId != _myPlayerId.value) {
                         val newGameState = stateAdapter.fromJson(msg.stateJson)
-                        if (newGameState != null && newGameState.stateVersion >= _onlineState.value.stateVersion) {
+                        if (newGameState != null && newGameState.stateVersion > _onlineState.value.stateVersion) {
                             _onlineState.value = newGameState
                         }
                     }
                 }
                 "PLAY_CARD" -> {
                     if (isHost && msg.senderId == 1) {
-                        // Process guest card play on host
-                        processOnlineCardPlay(1, msg.cardIndex)
+                        if (_onlineState.value.currentTurnIndex == 1) {
+                            processOnlineCardPlay(1, msg.cardIndex)
+                        }
                     }
                 }
                 "LEAVE_ROOM" -> {
@@ -260,21 +263,28 @@ class OnlineManager {
 
     private fun sendNetworkMessage(msg: OnlineNetworkMessage) {
         val jsonStr = messageAdapter.toJson(msg)
-        scope.launch {
-            try {
-                // Try sending over WebSocket
-                webSocket?.send(jsonStr)
+        try {
+            // Try sending over WebSocket if open
+            webSocket?.send(jsonStr)
 
-                // Also publish via HTTP POST to ensure all subscribers get it
-                val body = jsonStr.toRequestBody("text/plain".toMediaType())
-                val req = Request.Builder()
-                    .url("https://ntfy.sh/pisti_online_${msg.roomCode}")
-                    .post(body)
-                    .build()
-                client.newCall(req).execute().close()
-            } catch (e: Exception) {
-                Log.e("OnlineManager", "Send error: ${e.message}")
-            }
+            // Publish asynchronously via HTTP POST so UI thread and coroutine never block
+            val body = jsonStr.toRequestBody("text/plain".toMediaType())
+            val req = Request.Builder()
+                .url("https://ntfy.sh/pisti_room_${msg.roomCode}")
+                .post(body)
+                .build()
+
+            client.newCall(req).enqueue(object : Callback {
+                override fun onFailure(call: Call, e: IOException) {
+                    Log.e("OnlineManager", "Async send failed: ${e.message}")
+                }
+
+                override fun onResponse(call: Call, response: Response) {
+                    response.close()
+                }
+            })
+        } catch (e: Exception) {
+            Log.e("OnlineManager", "Send error: ${e.message}")
         }
     }
 
