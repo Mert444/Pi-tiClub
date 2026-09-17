@@ -11,6 +11,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import okhttp3.*
 import okhttp3.MediaType.Companion.toMediaType
@@ -137,19 +138,20 @@ class OnlineManager {
         connectWebSocket(cleanCode)
         startHttpPolling(cleanCode)
 
-        // Send JOIN message
+        // Send JOIN message instantly and repeat to guarantee instant pairing
         scope.launch {
-            delay(500)
-            sendNetworkMessage(
-                OnlineNetworkMessage(
-                    type = "JOIN_ROOM",
-                    senderId = 1,
-                    roomCode = cleanCode,
-                    stateJson = guestName
-                )
+            val joinMsg = OnlineNetworkMessage(
+                type = "JOIN_ROOM",
+                senderId = 1,
+                roomCode = cleanCode,
+                stateJson = guestName
             )
-            onResult(true, "Verbindung zum Raum wird aufgebaut...")
+            repeat(4) {
+                sendNetworkMessage(joinMsg)
+                delay(200)
+            }
         }
+        onResult(true, "Verbindung zum Raum wird aufgebaut...")
     }
 
     private fun connectWebSocket(roomCode: String) {
@@ -182,8 +184,7 @@ class OnlineManager {
     private fun startHttpPolling(roomCode: String) {
         pollJob?.cancel()
         pollJob = scope.launch {
-            while (true) {
-                delay(2000)
+            while (isActive) {
                 try {
                     val req = Request.Builder()
                         .url("https://ntfy.sh/pisti_online_$roomCode/json?poll=1")
@@ -201,6 +202,8 @@ class OnlineManager {
                 } catch (e: Exception) {
                     Log.e("OnlineManager", "Polling Error: ${e.message}")
                 }
+                val pollDelay = if (!_onlineState.value.isGameStarted) 300L else 1000L
+                delay(pollDelay)
             }
         }
     }
@@ -487,7 +490,7 @@ class OnlineManager {
                 lastScorePoints = if (captured) (newRoundScore - player.roundScore) else 0,
                 lastScorePlayerName = if (captured) player.name else null,
                 isGameStarted = true,
-                dealAnimTrigger = if (dealTriggered) System.currentTimeMillis() else currentState.dealAnimTrigger
+                dealAnimTrigger = if (dealTriggered) System.currentTimeMillis() else 0L
             )
 
             _onlineState.value = updatedState

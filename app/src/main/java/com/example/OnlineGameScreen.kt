@@ -315,15 +315,15 @@ fun OnlineGameScreen(navController: NavController, gameViewModel: GameViewModel)
 
     val isMyTurn = onlineState.currentTurnIndex == myPlayerId
 
-    var landedCounts by remember(onlineState.dealAnimTrigger) {
-        mutableStateOf<List<Int>?>(if (onlineState.dealAnimTrigger > 0L) listOf(0, 0) else null)
-    }
+    var landedCounts by remember { mutableStateOf<List<Int>?>(null) }
+    var lastProcessedTrigger by remember { mutableStateOf(0L) }
 
     LaunchedEffect(onlineState.dealAnimTrigger) {
-        if (onlineState.dealAnimTrigger > 0L) {
+        if (onlineState.dealAnimTrigger > 0L && onlineState.dealAnimTrigger != lastProcessedTrigger) {
+            lastProcessedTrigger = onlineState.dealAnimTrigger
             landedCounts = listOf(0, 0)
             for (c in 1..4) {
-                kotlinx.coroutines.delay(180)
+                kotlinx.coroutines.delay(120)
                 landedCounts = listOf(c, c)
             }
             landedCounts = null
@@ -612,32 +612,6 @@ fun OnlineGameScreen(navController: NavController, gameViewModel: GameViewModel)
                             .clickable(enabled = isMyTurn && landedCounts == null) {
                                 onlineManager.playCard(index)
                             }
-                    )
-                }
-            }
-        }
-
-        // Card Dealing Banner Overlay
-        if (landedCounts != null) {
-            Box(
-                modifier = Modifier
-                    .align(Alignment.Center)
-                    .background(Color.Black.copy(alpha = 0.88f), RoundedCornerShape(16.dp))
-                    .border(1.5.dp, PrimaryYellow, RoundedCornerShape(16.dp))
-                    .padding(horizontal = 24.dp, vertical = 14.dp)
-            ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    CircularProgressIndicator(
-                        modifier = Modifier.size(20.dp),
-                        color = PrimaryYellow,
-                        strokeWidth = 2.dp
-                    )
-                    Spacer(modifier = Modifier.width(12.dp))
-                    Text(
-                        "🎴 KARTEN WERDEN GEMISCHT & VERTEILT...",
-                        color = PrimaryYellow,
-                        fontSize = 14.sp,
-                        fontWeight = FontWeight.Bold
                     )
                 }
             }
