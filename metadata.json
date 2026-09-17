@@ -1,0 +1,6 @@
+{
+  "name": "Pişti",
+  "description": "Traditionelles türkisches Kartenspiel Pişti mit 4 Spielern am Tisch.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
