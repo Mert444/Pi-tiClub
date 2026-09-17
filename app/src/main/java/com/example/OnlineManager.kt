@@ -232,7 +232,9 @@ class OnlineManager {
                         .build()
                     client.newCall(req).execute().use { response ->
                         if (response.isSuccessful) {
-                            _connectionStatus.value = if (isHost) "Raum $roomCode aktiv – Warte auf Mitspieler" else "Verbinde mit Raum $roomCode..."
+                            if (_connectionStatus.value.contains("Fehler", ignoreCase = true) || _connectionStatus.value.contains("getrennt", ignoreCase = true)) {
+                                _connectionStatus.value = if (isHost) "Raum $roomCode aktiv – Warte auf Mitspieler" else "Verbinde mit Raum $roomCode..."
+                            }
                             val source = response.body?.source() ?: return@use
                             while (!source.exhausted() && isActive) {
                                 val line = source.readUtf8Line() ?: break
@@ -246,7 +248,7 @@ class OnlineManager {
                 } catch (e: Exception) {
                     Log.e("OnlineManager", "Stream error: ${e.message}")
                 }
-                delay(500L)
+                delay(400L)
             }
         }
     }
@@ -275,7 +277,7 @@ class OnlineManager {
                 } catch (e: Exception) {
                     Log.e("OnlineManager", "Polling Error: ${e.message}")
                 }
-                delay(750L)
+                delay(600L)
             }
         }
     }
@@ -871,8 +873,9 @@ class OnlineManager {
         if (code.isBlank()) return
         scope.launch(Dispatchers.IO) {
             try {
+                val topic = topicForRoom(code)
                 val req = Request.Builder()
-                    .url("https://ntfy.sh/pisti_room_$code/json?poll=1&since=5s")
+                    .url("https://ntfy.sh/$topic/json?poll=1&since=10s")
                     .build()
                 client.newCall(req).execute().use { resp ->
                     if (resp.isSuccessful) {

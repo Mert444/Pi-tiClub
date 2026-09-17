@@ -138,7 +138,13 @@ fun OnlineLobbyScreen(navController: NavController, gameViewModel: GameViewModel
                         .weight(1f)
                         .clip(RoundedCornerShape(8.dp))
                         .background(if (selectedTab == 0) PrimaryYellow else Color.Transparent)
-                        .clickable { selectedTab = 0 }
+                        .clickable {
+                            if (selectedTab != 0) {
+                                selectedTab = 0
+                                joinError = null
+                                onlineManager.resetLobby()
+                            }
+                        }
                         .padding(vertical = 10.dp),
                     contentAlignment = Alignment.Center
                 ) {
@@ -168,7 +174,13 @@ fun OnlineLobbyScreen(navController: NavController, gameViewModel: GameViewModel
                         .weight(1f)
                         .clip(RoundedCornerShape(8.dp))
                         .background(if (selectedTab == 1) PrimaryYellow else Color.Transparent)
-                        .clickable { selectedTab = 1 }
+                        .clickable {
+                            if (selectedTab != 1) {
+                                selectedTab = 1
+                                joinError = null
+                                onlineManager.resetLobby()
+                            }
+                        }
                         .padding(vertical = 10.dp),
                     contentAlignment = Alignment.Center
                 ) {
