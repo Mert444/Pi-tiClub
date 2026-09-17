@@ -219,13 +219,16 @@ class OnlineManager {
         resetLobby()
     }
 
+    private fun topicForRoom(roomCode: String): String = "pisti101_v2_room_$roomCode"
+
     private fun startRawStream(roomCode: String) {
         streamJob?.cancel()
         streamJob = scope.launch(Dispatchers.IO) {
+            val topic = topicForRoom(roomCode)
             while (isActive) {
                 try {
                     val req = Request.Builder()
-                        .url("https://ntfy.sh/pisti_room_$roomCode/json")
+                        .url("https://ntfy.sh/$topic/json")
                         .build()
                     client.newCall(req).execute().use { response ->
                         if (response.isSuccessful) {
@@ -251,11 +254,12 @@ class OnlineManager {
     private fun startSafetyPoller(roomCode: String) {
         pollJob?.cancel()
         pollJob = scope.launch(Dispatchers.IO) {
+            val topic = topicForRoom(roomCode)
             while (isActive) {
                 try {
                     // Poll with since=all so no initial JOIN_ROOM, SYNC_STATE or game starts are missed due to clock drift or network timing
                     val req = Request.Builder()
-                        .url("https://ntfy.sh/pisti_room_$roomCode/json?poll=1&since=all")
+                        .url("https://ntfy.sh/$topic/json?poll=1&since=all")
                         .build()
                     client.newCall(req).execute().use { resp ->
                         if (resp.isSuccessful) {
@@ -383,9 +387,10 @@ class OnlineManager {
     private fun sendNetworkMessage(msg: OnlineNetworkMessage) {
         val jsonStr = messageAdapter.toJson(msg).replace("\n", " ").replace("\r", "")
         try {
+            val topic = topicForRoom(msg.roomCode)
             val body = jsonStr.toRequestBody("text/plain".toMediaType())
             val req = Request.Builder()
-                .url("https://ntfy.sh/pisti_room_${msg.roomCode}")
+                .url("https://ntfy.sh/$topic")
                 .post(body)
                 .build()
 
