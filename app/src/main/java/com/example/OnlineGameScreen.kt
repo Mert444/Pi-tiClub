@@ -5,6 +5,7 @@ import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.widget.Toast
+import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.background
@@ -18,6 +19,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.ExitToApp
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.*
@@ -609,6 +611,10 @@ fun OnlineGameScreen(navController: NavController, gameViewModel: GameViewModel)
 
     val isMyTurn = onlineState.currentTurnIndex == myPlayerId
 
+    BackHandler {
+        showExitDialog = true
+    }
+
     val feltGradient = Brush.radialGradient(
         colors = listOf(Color(0xFF0F3B6A), Color(0xFF0A2548), Color(0xFF051428)),
         radius = 1200f
@@ -691,7 +697,7 @@ fun OnlineGameScreen(navController: NavController, gameViewModel: GameViewModel)
                             .border(1.dp, Color(0xFFD4AF37).copy(alpha = 0.8f), CircleShape)
                     ) {
                         Icon(
-                            Icons.Default.ExitToApp,
+                            Icons.AutoMirrored.Filled.ExitToApp,
                             contentDescription = "Raum verlassen",
                             tint = Color.White,
                             modifier = Modifier.size(18.dp)
