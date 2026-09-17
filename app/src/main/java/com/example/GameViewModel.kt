@@ -46,7 +46,7 @@ data class GameState(
     val starterPlayerIndex: Int = 0, // Player who started current round
     val lastCaptorIndex: Int = -1,
     val roundNumber: Int = 1,
-    val targetScore: Int = 501,
+    val targetScore: Int = 101,
     val elapsedSeconds: Int = 0,
     val isMatchOver: Boolean = false,
     val matchWinnerName: String? = null,
@@ -65,13 +65,15 @@ data class GameState(
     val gamesWon: Int = 12,
     val pistiTotalCount: Int = 24,
     val lastPistiMessage: String? = null,
-    val lastScoreEvent: ScoreGainEvent? = null
+    val lastScoreEvent: ScoreGainEvent? = null,
+    val dealAnimTrigger: Long = 0L
 )
 
 class GameViewModel : ViewModel() {
     private val _state = MutableStateFlow(GameState())
     val state: StateFlow<GameState> = _state
     private var timerJob: kotlinx.coroutines.Job? = null
+    private var globalMatchStarterIndex = 0
 
     init {
         startNewMatch()
@@ -141,7 +143,9 @@ class GameViewModel : ViewModel() {
     }
 
     fun startNewMatch() {
-        val initialStarter = kotlin.random.Random.nextInt(4)
+        val initialStarter = globalMatchStarterIndex
+        globalMatchStarterIndex = (globalMatchStarterIndex + 1) % 4
+
         _state.update {
             it.copy(
                 roundNumber = 1,
@@ -162,34 +166,122 @@ class GameViewModel : ViewModel() {
         startNewRound(isMatchStart = true)
     }
 
-    fun startNewRound(isMatchStart: Boolean = false) {
+    private fun dealNewRoundDeck(currentPlayers: List<PlayerInfo>): Triple<List<PlayerInfo>, List<Card>, List<Card>> {
         val fullDeck = mutableListOf<Card>()
         Suit.values().forEach { suit ->
             Rank.values().forEach { rank ->
                 fullDeck.add(Card(suit, rank))
             }
         }
-        // Use Kotlin Random with current time entropy to ensure distinct random distribution every round
-        fullDeck.shuffle(kotlin.random.Random(System.currentTimeMillis() + System.nanoTime()))
 
-        // Start with empty center pile as requested (no pre-laid cards)
-        val center = emptyList<Card>()
-        var remaining: List<Card> = fullDeck
+        val secureRandom = java.security.SecureRandom()
+        repeat(7) {
+            fullDeck.shuffle(secureRandom)
+        }
 
-        // Deal 4 unique cards to each of the 4 players (16 total)
-        val resetPlayers = _state.value.players.mapIndexed { idx, p ->
-            val playerHand = remaining.drop(idx * 4).take(4)
-            p.copy(
-                hand = playerHand,
+        val cutPoint = 12 + secureRandom.nextInt(28)
+        val cutDeck = (fullDeck.drop(cutPoint) + fullDeck.take(cutPoint)).toMutableList()
+        cutDeck.shuffle(secureRandom)
+
+        // Deal 4 initial center cards (3 face down, 1 face up)
+        val centerCards = cutDeck.take(4).toMutableList()
+        val remDeck = cutDeck.drop(4).toMutableList()
+
+        // Ensure top card of center pile is not a Jack
+        if (centerCards.last().rank == Rank.JACK) {
+            val nonJackIndex = remDeck.indexOfFirst { it.rank != Rank.JACK }
+            if (nonJackIndex != -1) {
+                val temp = centerCards[3]
+                centerCards[3] = remDeck[nonJackIndex]
+                remDeck[nonJackIndex] = temp
+            }
+        }
+
+        val centerPile = listOf(
+            centerCards[0].copy(isFaceUp = false),
+            centerCards[1].copy(isFaceUp = false),
+            centerCards[2].copy(isFaceUp = false),
+            centerCards[3].copy(isFaceUp = true)
+        )
+
+        // Deal 16 cards to 4 players using fair Pişti-opportunity distribution
+        val (updatedPlayersWithHands, remainingDeck) = dealSubHand(remDeck, currentPlayers)
+
+        val updatedPlayers = updatedPlayersWithHands.map { player ->
+            player.copy(
                 capturedCount = 0,
                 roundScore = 0
             )
         }
-        remaining = remaining.drop(16)
+
+        return Triple(updatedPlayers, centerPile, remainingDeck)
+    }
+
+    private fun dealSubHand(remainingDeck: List<Card>, players: List<PlayerInfo>): Pair<List<PlayerInfo>, List<Card>> {
+        if (remainingDeck.isEmpty()) return Pair(players, emptyList())
+
+        val cardsPerPlayer = if (remainingDeck.size >= 16) 4 else (remainingDeck.size / 4)
+        if (cardsPerPlayer <= 0) return Pair(players, remainingDeck)
+
+        val totalToDeal = cardsPerPlayer * 4
+        val dealBatch = remainingDeck.take(totalToDeal).toMutableList()
+        val leftoverDeck = remainingDeck.drop(totalToDeal)
+
+        // Separate Jacks and non-Jacks
+        val jacks = dealBatch.filter { it.rank == Rank.JACK }.toMutableList()
+        val nonJacks = dealBatch.filter { it.rank != Rank.JACK }.toMutableList()
+
+        val hands = List(4) { mutableListOf<Card>() }
+
+        // 1. Distribute Jacks evenly (at most 1 per player if jacks <= 4)
+        val playerIndices = mutableListOf(0, 1, 2, 3)
+        playerIndices.shuffle()
+        while (jacks.isNotEmpty() && playerIndices.isNotEmpty()) {
+            val p = playerIndices.removeAt(0)
+            hands[p].add(jacks.removeAt(0))
+        }
+
+        // 2. Interleave non-Jacks by rank so matching ranks land in different players' hands (creating Pişti chances!)
+        val rankGroupMap = nonJacks.groupBy { it.rank }.mapValues { it.value.toMutableList() }.toMutableMap()
+        val interleavedCards = mutableListOf<Card>()
+
+        while (rankGroupMap.isNotEmpty()) {
+            val keys = rankGroupMap.keys.toList().shuffled()
+            keys.forEach { rankKey ->
+                val list = rankGroupMap[rankKey]
+                if (!list.isNullOrEmpty()) {
+                    interleavedCards.add(list.removeAt(0))
+                    if (list.isEmpty()) rankGroupMap.remove(rankKey)
+                }
+            }
+        }
+
+        // Add remaining jacks if any
+        interleavedCards.addAll(jacks)
+
+        // 3. Fill hands round-robin so players receive matching pairs across different hands
+        var cardIdx = 0
+        repeat(cardsPerPlayer) {
+            for (p in 0..3) {
+                if (hands[p].size < cardsPerPlayer && cardIdx < interleavedCards.size) {
+                    hands[p].add(interleavedCards[cardIdx++])
+                }
+            }
+        }
+
+        val updatedPlayers = players.mapIndexed { idx, player ->
+            player.copy(hand = hands[idx].shuffled())
+        }
+
+        return Pair(updatedPlayers, leftoverDeck)
+    }
+
+    fun startNewRound(isMatchStart: Boolean = false) {
+        val (resetPlayers, centerPile, remainingDeck) = dealNewRoundDeck(_state.value.players)
 
         // Select starting player:
-        // On match start: use the initial randomly selected starter.
-        // On subsequent rounds: rotate starting player clockwise so every player gets fair turns starting!
+        // On match start: use current starter.
+        // On subsequent rounds: rotate starting player clockwise (0 -> 1 -> 2 -> 3 -> 0)
         val startingPlayerIndex = if (isMatchStart) {
             _state.value.starterPlayerIndex
         } else {
@@ -201,15 +293,16 @@ class GameViewModel : ViewModel() {
 
         _state.update {
             it.copy(
-                deck = remaining,
-                centerPile = center,
+                deck = remainingDeck,
+                centerPile = centerPile,
                 players = resetPlayers,
                 currentTurnIndex = startingPlayerIndex,
                 starterPlayerIndex = startingPlayerIndex,
                 lastCaptorIndex = -1,
                 showRoundEndSummary = false,
                 statusMessage = statusMsg,
-                lastPistiMessage = null
+                lastPistiMessage = null,
+                dealAnimTrigger = System.currentTimeMillis()
             )
         }
 
@@ -298,15 +391,12 @@ class GameViewModel : ViewModel() {
         var finalDeck = currentState.deck
         var finalPlayers = updatedPlayers
 
+        var dealTriggered = false
         if (allHandsEmpty && finalDeck.isNotEmpty()) {
-            val cardsPerPlayer = if (finalDeck.size >= 16) 4 else (finalDeck.size / 4)
-            if (cardsPerPlayer > 0) {
-                finalPlayers = updatedPlayers.mapIndexed { idx, player ->
-                    val cardsToTake = finalDeck.drop(idx * cardsPerPlayer).take(cardsPerPlayer)
-                    player.copy(hand = cardsToTake)
-                }
-                finalDeck = finalDeck.drop(cardsPerPlayer * 4)
-            }
+            val (newPlayers, leftoverDeck) = dealSubHand(finalDeck, updatedPlayers)
+            finalPlayers = newPlayers
+            finalDeck = leftoverDeck
+            dealTriggered = true
         }
 
         val isRoundOver = finalPlayers.all { it.hand.isEmpty() } && finalDeck.isEmpty()
@@ -374,27 +464,7 @@ class GameViewModel : ViewModel() {
             } else {
                 // Continue game automatically: deal next deck without blocking dialog
                 val nextRoundNum = currentState.roundNumber + 1
-
-                val fullDeck = mutableListOf<Card>()
-                Suit.values().forEach { suit ->
-                    Rank.values().forEach { rank ->
-                        fullDeck.add(Card(suit, rank))
-                    }
-                }
-                fullDeck.shuffle(kotlin.random.Random(System.currentTimeMillis() + System.nanoTime()))
-
-                val newCenter = emptyList<Card>()
-                var newRemaining: List<Card> = fullDeck
-
-                val newResetPlayers = finalPlayers.mapIndexed { idx, p ->
-                    val playerHand = newRemaining.drop(idx * 4).take(4)
-                    p.copy(
-                        hand = playerHand,
-                        capturedCount = 0,
-                        roundScore = 0
-                    )
-                }
-                newRemaining = newRemaining.drop(16)
+                val (newResetPlayers, newCenter, newRemaining) = dealNewRoundDeck(finalPlayers)
 
                 val startingPlayerIndex = (currentState.starterPlayerIndex + 1) % 4
                 val starterName = newResetPlayers[startingPlayerIndex].name
@@ -412,7 +482,8 @@ class GameViewModel : ViewModel() {
                         showRoundEndSummary = false,
                         statusMessage = statusMsg,
                         lastPistiMessage = pistiNotice,
-                        lastScoreEvent = scoreAnimEvent ?: it.lastScoreEvent
+                        lastScoreEvent = scoreAnimEvent ?: it.lastScoreEvent,
+                        dealAnimTrigger = System.currentTimeMillis()
                     )
                 }
 
@@ -436,7 +507,8 @@ class GameViewModel : ViewModel() {
                     lastCaptorIndex = newLastCaptor,
                     statusMessage = statusMsg,
                     lastPistiMessage = pistiNotice,
-                    lastScoreEvent = scoreAnimEvent ?: it.lastScoreEvent
+                    lastScoreEvent = scoreAnimEvent ?: it.lastScoreEvent,
+                    dealAnimTrigger = if (dealTriggered) System.currentTimeMillis() else it.dealAnimTrigger
                 )
             }
 
@@ -462,75 +534,48 @@ class GameViewModel : ViewModel() {
         val topCard = centerPile.lastOrNull()
         var cardToPlay: Card? = null
 
-        // 55% chance for bot to make a casual, relaxed move
-        val isCasualMove = kotlin.random.Random.nextFloat() < 0.55f
+        if (centerPile.isEmpty()) {
+            // Table is empty: bot plays a safe non-Jack, non-point card if available
+            val safeCards = botHand.filter { card ->
+                card.rank != Rank.JACK &&
+                card.rank != Rank.ACE &&
+                !(card.suit == Suit.DIAMONDS && card.rank == Rank.TEN) &&
+                !(card.suit == Suit.CLUBS && card.rank == Rank.TWO)
+            }
+            cardToPlay = safeCards.shuffled().firstOrNull()
+                ?: botHand.filter { it.rank != Rank.JACK }.shuffled().firstOrNull()
+                ?: botHand.first()
+        } else if (centerPile.size == 1 && topCard != null) {
+            // 1 Card on table (Pişti opportunity):
+            val matchingCard = botHand.find { it.rank == topCard.rank }
+            val jackCard = botHand.find { it.rank == Rank.JACK }
 
-        if (isCasualMove && botHand.size > 1) {
-            val nonJacks = botHand.filter { it.rank != Rank.JACK }
-            cardToPlay = if (nonJacks.isNotEmpty()) nonJacks.shuffled().first() else botHand.shuffled().first()
-        }
+            // Balanced AI: 75% chance bot takes Pişti if available, 25% chance holds back to keep game dynamic
+            val takePisti = kotlin.random.Random.nextFloat() < 0.75f
 
-        if (cardToPlay == null) {
-            if (centerPile.isEmpty()) {
-                // Strategy on EMPTY pile:
-                // 50% chance: if human player has a matching rank in hand, bot plays that rank to setup a Pişti for human!
-                val humanHand = state.players.find { it.isHuman }?.hand ?: emptyList()
-                val humanRanks = humanHand.map { it.rank }.toSet()
-                val setupCardForHuman = botHand.find { it.rank in humanRanks && it.rank != Rank.JACK }
-
-                if (setupCardForHuman != null && kotlin.random.Random.nextFloat() < 0.50f) {
-                    cardToPlay = setupCardForHuman
-                } else {
-                    val safeCards = botHand.filter { card ->
-                        card.rank != Rank.JACK &&
-                        card.rank != Rank.ACE &&
-                        !(card.suit == Suit.DIAMONDS && card.rank == Rank.TEN) &&
-                        !(card.suit == Suit.CLUBS && card.rank == Rank.TWO)
-                    }
-                    val rankCounts = botHand.groupingBy { it.rank }.eachCount()
-                    val duplicateCard = safeCards.find { (rankCounts[it.rank] ?: 0) > 1 }
-
-                    cardToPlay = duplicateCard ?: safeCards.shuffled().firstOrNull() ?: botHand.minByOrNull {
-                        var valRisk = it.rank.value
-                        if (it.rank == Rank.JACK) valRisk += 20
-                        if (it.suit == Suit.DIAMONDS && it.rank == Rank.TEN) valRisk += 15
-                        if (it.suit == Suit.CLUBS && it.rank == Rank.TWO) valRisk += 10
-                        valRisk
-                    } ?: botHand.first()
-                }
-            } else if (centerPile.size == 1 && topCard != null) {
-                // Strategy on 1 CARD pile:
-                val matchingCard = botHand.find { it.rank == topCard.rank }
-                val jackCard = botHand.find { it.rank == Rank.JACK }
-
-                // 65% chance to skip stealing Pişti, leaving the single card for the next player / human!
-                val missPistiChance = kotlin.random.Random.nextFloat() < 0.65f
-
-                if (matchingCard != null && !missPistiChance) {
-                    cardToPlay = matchingCard
-                } else if (jackCard != null && !missPistiChance && (topCard.rank == Rank.ACE || (topCard.suit == Suit.DIAMONDS && topCard.rank == Rank.TEN))) {
-                    cardToPlay = jackCard
-                } else {
-                    val safeNonJacks = botHand.filter { it.rank != Rank.JACK }
-                    cardToPlay = safeNonJacks.shuffled().firstOrNull() ?: botHand.first()
-                }
+            if (matchingCard != null && takePisti) {
+                cardToPlay = matchingCard
+            } else if (jackCard != null && takePisti && (topCard.rank == Rank.ACE || (topCard.suit == Suit.DIAMONDS && topCard.rank == Rank.TEN))) {
+                cardToPlay = jackCard
             } else {
-                // Strategy on 2+ CARDS pile:
-                val topCardRank = topCard?.rank
-                val matchingCard = botHand.find { it.rank == topCardRank }
-                val jackCard = botHand.find { it.rank == Rank.JACK }
+                val safeCards = botHand.filter { it.rank != Rank.JACK && it.rank != topCard.rank }
+                cardToPlay = safeCards.shuffled().firstOrNull()
+                    ?: botHand.filter { it.rank != Rank.JACK }.shuffled().firstOrNull()
+                    ?: botHand.first()
+            }
+        } else {
+            // 2+ Cards on table:
+            val topCardRank = topCard?.rank
+            val matchingCard = botHand.find { it.rank == topCardRank }
+            val jackCard = botHand.find { it.rank == Rank.JACK }
 
-                // 50% chance bot holds back matching card/jack to let point pile grow for human
-                val holdBack = kotlin.random.Random.nextFloat() < 0.50f
-
-                if (matchingCard != null && !holdBack) {
-                    cardToPlay = matchingCard
-                } else if (jackCard != null && !holdBack) {
-                    cardToPlay = jackCard
-                } else {
-                    val safeNonJacks = botHand.filter { it.rank != Rank.JACK }
-                    cardToPlay = safeNonJacks.shuffled().firstOrNull() ?: botHand.first()
-                }
+            if (matchingCard != null) {
+                cardToPlay = matchingCard
+            } else if (jackCard != null) {
+                cardToPlay = jackCard
+            } else {
+                val safeCards = botHand.filter { it.rank != Rank.JACK }
+                cardToPlay = safeCards.shuffled().firstOrNull() ?: botHand.first()
             }
         }
 
