@@ -17,22 +17,29 @@ import okhttp3.*
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.RequestBody.Companion.toRequestBody
 import java.io.IOException
+import java.util.Collections
 import java.util.concurrent.TimeUnit
-import kotlin.random.Random
 
 data class OnlineCardDto(
-    val suit: String,
-    val rank: String,
+    val suit: String = "HEARTS",
+    val rank: String = "TWO",
     val isFaceUp: Boolean = true
-)
+) {
+    fun toCard(): Card {
+        val s = try { Suit.valueOf(suit) } catch (e: Exception) { Suit.HEARTS }
+        val r = try { Rank.valueOf(rank) } catch (e: Exception) { Rank.TWO }
+        return Card(s, r, isFaceUp)
+    }
+}
 
 data class OnlinePlayerDto(
-    val id: Int, // 0 = Host, 1 = Guest
-    val name: String,
+    val id: Int = 0, // 0 = Host, 1 = Guest
+    val name: String = "",
     val hand: List<OnlineCardDto> = emptyList(),
     val capturedCount: Int = 0,
     val roundScore: Int = 0,
-    val totalScore: Int = 0
+    val totalScore: Int = 0,
+    val pistiCount: Int = 0
 )
 
 data class OnlineGameStateDto(
@@ -50,6 +57,7 @@ data class OnlineGameStateDto(
     val targetScore: Int = 101,
     val isMatchOver: Boolean = false,
     val matchWinnerName: String? = null,
+    val overshootMessage: String? = null,
     val statusMessage: String = "Warte auf Mitspieler...",
     val lastPistiMessage: String? = null,
     val isGameStarted: Boolean = false,
@@ -61,10 +69,14 @@ data class OnlineGameStateDto(
 )
 
 data class OnlineNetworkMessage(
-    val type: String, // "JOIN_ROOM", "SYNC_STATE", "PLAY_CARD", "LEAVE_ROOM"
-    val senderId: Int, // 0 = Host, 1 = Guest
-    val roomCode: String,
+    val id: String = java.util.UUID.randomUUID().toString(),
+    val type: String = "", // "JOIN_ROOM", "SYNC_STATE", "PLAY_CARD", "LEAVE_ROOM"
+    val senderId: Int = 0, // 0 = Host, 1 = Guest
+    val roomCode: String = "",
     val cardIndex: Int = -1,
+    val cardSuit: String = "",
+    val cardRank: String = "",
+    val actionSeq: Long = 0L,
     val stateJson: String = ""
 )
 
@@ -99,8 +111,18 @@ class OnlineManager {
     private var activeRoomCode = ""
     private var myName = "Spieler"
     private var currentVersion: Long = 0L
+    private var guestActionSeq: Long = 0L
 
     private var joinJob: Job? = null
+
+    // Message deduplication cache: prevents processing duplicate messages from poller replays
+    private val processedMessageIds = Collections.synchronizedSet(
+        object : LinkedHashMap<String, Boolean>(256, 0.75f, true) {
+            override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Boolean>?): Boolean {
+                return size > 300
+            }
+        }.keys
+    )
 
     fun createRoom(hostName: String): String {
         resetLobby()
@@ -205,7 +227,7 @@ class OnlineManager {
                 } catch (e: Exception) {
                     Log.e("OnlineManager", "Stream error: ${e.message}")
                 }
-                delay(1000L) // Reconnect after 1 second if closed
+                delay(1000L)
             }
         }
     }
@@ -215,8 +237,9 @@ class OnlineManager {
         pollJob = scope.launch(Dispatchers.IO) {
             while (isActive) {
                 try {
+                    // Only poll last 3 seconds to avoid retrieving stale history
                     val req = Request.Builder()
-                        .url("https://ntfy.sh/pisti_room_$roomCode/json?poll=1&since=8s")
+                        .url("https://ntfy.sh/pisti_room_$roomCode/json?poll=1&since=3s")
                         .build()
                     client.newCall(req).execute().use { resp ->
                         if (resp.isSuccessful) {
@@ -232,7 +255,7 @@ class OnlineManager {
                 } catch (e: Exception) {
                     Log.e("OnlineManager", "Polling Error: ${e.message}")
                 }
-                delay(1000L) // Non-blocking 1.0s redundant sync
+                delay(1500L)
             }
         }
     }
@@ -251,6 +274,11 @@ class OnlineManager {
             val msg = messageAdapter.fromJson(rawMsg) ?: return
             if (msg.roomCode != activeRoomCode) return
 
+            // Deduplication check: drop duplicate network packets
+            if (msg.id.isNotEmpty() && !processedMessageIds.add(msg.id)) {
+                return
+            }
+
             when (msg.type) {
                 "JOIN_ROOM" -> {
                     if (isHost && msg.senderId == 1) {
@@ -258,7 +286,6 @@ class OnlineManager {
                         if (!_onlineState.value.isGameStarted) {
                             startNewOnlineGame(guestName)
                         } else {
-                            // Re-broadcast state so guest connects immediately
                             broadcastState(_onlineState.value)
                         }
                     }
@@ -267,7 +294,10 @@ class OnlineManager {
                     if (msg.senderId != _myPlayerId.value) {
                         val newGameState = stateAdapter.fromJson(msg.stateJson)
                         if (newGameState != null) {
-                            if (!isHost || newGameState.stateVersion > _onlineState.value.stateVersion) {
+                            val curVer = _onlineState.value.stateVersion
+                            // STRICT MONOTONIC VERSION CHECK:
+                            // NEVER accept older or equal versions, preventing game state rewinds & card flickering
+                            if (newGameState.stateVersion > curVer || (curVer == 0L && newGameState.isGameStarted)) {
                                 _onlineState.value = newGameState
                                 if (newGameState.isGameStarted) {
                                     _isJoining.value = false
@@ -282,7 +312,7 @@ class OnlineManager {
                 "PLAY_CARD" -> {
                     if (isHost && msg.senderId == 1) {
                         if (_onlineState.value.currentTurnIndex == 1) {
-                            processOnlineCardPlay(1, msg.cardIndex)
+                            processOnlineCardPlay(1, msg.cardIndex, msg.cardSuit, msg.cardRank)
                         }
                     }
                 }
@@ -335,91 +365,34 @@ class OnlineManager {
         if (!currentState.isGameStarted || currentState.isMatchOver) return
         if (currentState.currentTurnIndex != myId) return
 
-        if (isHost) {
-            processOnlineCardPlay(0, cardIndex)
-        } else {
-            // Apply optimistic card play locally on Guest device so UI updates with 0ms lag
-            optimisticGuestCardPlay(cardIndex)
+        val myPlayer = currentState.players.getOrNull(myId) ?: return
+        if (cardIndex !in myPlayer.hand.indices) return
+        val card = myPlayer.hand[cardIndex]
 
+        if (isHost) {
+            processOnlineCardPlay(0, cardIndex, card.suit, card.rank)
+        } else {
+            val seq = ++guestActionSeq
             val playMsg = OnlineNetworkMessage(
+                id = java.util.UUID.randomUUID().toString(),
                 type = "PLAY_CARD",
                 senderId = 1,
                 roomCode = activeRoomCode,
-                cardIndex = cardIndex
+                cardIndex = cardIndex,
+                cardSuit = card.suit,
+                cardRank = card.rank,
+                actionSeq = seq
             )
             sendNetworkMessage(playMsg)
-            // Burst send to ensure delivery
+
+            // Retry after 300ms if host hasn't processed turn yet (guards against lost packets)
             scope.launch {
-                delay(120)
-                sendNetworkMessage(playMsg)
-            }
-        }
-    }
-
-    private fun optimisticGuestCardPlay(cardIndex: Int) {
-        val currentState = _onlineState.value
-        val guest = currentState.players.getOrNull(1) ?: return
-        if (cardIndex !in guest.hand.indices) return
-
-        val playedCard = guest.hand[cardIndex]
-        val newHand = guest.hand.filterIndexed { idx, _ -> idx != cardIndex }
-
-        val oldCenter = currentState.centerPile
-        val topCard = oldCenter.lastOrNull()
-
-        var captured = false
-        var isPisti = false
-        var pistiPoints = 0
-        var newCenterPile = oldCenter + playedCard.copy(isFaceUp = true)
-
-        if (topCard != null) {
-            if (playedCard.rank == topCard.rank) {
-                captured = true
-                if (oldCenter.size == 1) {
-                    isPisti = true
-                    pistiPoints = if (playedCard.rank == "JACK") 20 else 10
+                delay(300)
+                if (_onlineState.value.currentTurnIndex == 1 && _onlineState.value.isGameStarted) {
+                    sendNetworkMessage(playMsg)
                 }
-            } else if (playedCard.rank == "JACK") {
-                captured = true
             }
         }
-
-        var newCapturedCount = guest.capturedCount
-        var newRoundScore = guest.roundScore
-        var pistiNotice: String? = null
-
-        if (captured) {
-            newCapturedCount += newCenterPile.size
-            val cardPoints = newCenterPile.sumOf { getCardPoints(it) }
-            newRoundScore += cardPoints + pistiPoints
-            if (isPisti) {
-                pistiNotice = "🔥 PIŞTI (+${pistiPoints} P) FÜR ${guest.name.uppercase()}!"
-            }
-            newCenterPile = emptyList()
-        }
-
-        val updatedGuest = guest.copy(
-            hand = newHand,
-            capturedCount = newCapturedCount,
-            roundScore = newRoundScore
-        )
-
-        val updatedPlayers = currentState.players.map {
-            if (it.id == 1) updatedGuest else it
-        }
-
-        val hostName = currentState.hostName
-
-        val optimisticState = currentState.copy(
-            stateVersion = currentState.stateVersion,
-            centerPile = newCenterPile,
-            players = updatedPlayers,
-            currentTurnIndex = 0, // Now Host turn
-            statusMessage = "$hostName IST AM ZUG...",
-            lastPistiMessage = pistiNotice
-        )
-
-        _onlineState.value = optimisticState
     }
 
     private fun startNewOnlineGame(guestName: String) {
@@ -438,8 +411,8 @@ class OnlineManager {
 
         currentVersion = 1L
 
-        val hostPlayer = OnlinePlayerDto(0, myName, hostHand, 0, 0, 0)
-        val guestPlayer = OnlinePlayerDto(1, guestName, guestHand, 0, 0, 0)
+        val hostPlayer = OnlinePlayerDto(0, myName, hostHand, 0, 0, 0, 0)
+        val guestPlayer = OnlinePlayerDto(1, guestName, guestHand, 0, 0, 0, 0)
 
         val newState = OnlineGameStateDto(
             stateVersion = currentVersion,
@@ -466,20 +439,28 @@ class OnlineManager {
 
         _onlineState.value = newState
         broadcastState(newState)
-        // Repeat to guarantee guest receives game start
         scope.launch {
             delay(150)
             broadcastState(newState)
         }
     }
 
-    private fun processOnlineCardPlay(playerIndex: Int, cardIndex: Int) {
+    private fun processOnlineCardPlay(playerIndex: Int, cardIndex: Int, cardSuit: String = "", cardRank: String = "") {
         val currentState = _onlineState.value
         val player = currentState.players.getOrNull(playerIndex) ?: return
-        if (cardIndex !in player.hand.indices) return
 
-        val playedCard = player.hand[cardIndex]
-        val newHand = player.hand.filterIndexed { idx, _ -> idx != cardIndex }
+        // Robust card matching by suit and rank to eliminate any index desync
+        val actualIndex = if (cardSuit.isNotEmpty() && cardRank.isNotEmpty()) {
+            val found = player.hand.indexOfFirst { it.suit == cardSuit && it.rank == cardRank }
+            if (found != -1) found else cardIndex
+        } else {
+            cardIndex
+        }
+
+        if (actualIndex !in player.hand.indices) return
+
+        val playedCard = player.hand[actualIndex]
+        val newHand = player.hand.filterIndexed { idx, _ -> idx != actualIndex }
 
         val oldCenter = currentState.centerPile
         val topCard = oldCenter.lastOrNull()
@@ -503,6 +484,7 @@ class OnlineManager {
 
         var newCapturedCount = player.capturedCount
         var newRoundScore = player.roundScore
+        var newPistiCount = player.pistiCount
         var pistiNotice: String? = null
 
         if (captured) {
@@ -510,6 +492,7 @@ class OnlineManager {
             val cardPoints = newCenterPile.sumOf { getCardPoints(it) }
             newRoundScore += cardPoints + pistiPoints
             if (isPisti) {
+                newPistiCount += 1
                 pistiNotice = "🔥 PIŞTI (+${pistiPoints} P) FÜR ${player.name.uppercase()}!"
             }
             newCenterPile = emptyList()
@@ -518,7 +501,8 @@ class OnlineManager {
         val updatedPlayer = player.copy(
             hand = newHand,
             capturedCount = newCapturedCount,
-            roundScore = newRoundScore
+            roundScore = newRoundScore,
+            pistiCount = newPistiCount
         )
 
         val updatedPlayers = currentState.players.map {
@@ -526,6 +510,9 @@ class OnlineManager {
         }
 
         val newLastCaptor = if (captured) playerIndex else currentState.lastCaptorIndex
+
+        // Strictly alternating turn order
+        val nextTurn = (playerIndex + 1) % 2
 
         // Check if both hands are empty
         val allHandsEmpty = updatedPlayers.all { it.hand.isEmpty() }
@@ -550,16 +537,6 @@ class OnlineManager {
 
         val isRoundOver = allHandsEmpty && finalDeck.isEmpty()
 
-        val nextTurn = if (isRoundOver) {
-            0
-        } else if (dealTriggered) {
-            if (newLastCaptor in 0..1) newLastCaptor else (playerIndex + 1) % 2
-        } else {
-            (playerIndex + 1) % 2
-        }
-
-        val nextStarterIndex = currentState.starterPlayerIndex
-
         currentVersion++
 
         if (isRoundOver) {
@@ -577,7 +554,7 @@ class OnlineManager {
                 newCenterPile = emptyList()
             }
 
-            // Award +3 for most cards
+            // Award +3 for most cards majority
             val p0Count = roundFinalPlayers[0].capturedCount
             val p1Count = roundFinalPlayers[1].capturedCount
             var p0Bonus = 0
@@ -588,20 +565,48 @@ class OnlineManager {
                 p1Bonus = 3
             }
 
+            // EXACT 101 POINTS WIN RULE:
+            // "es soll ein gewinner geben wenn die person 101 punkte ereicht hat aber der gewinner muss genau 101 punkte ereichen selbst um zu gewinnen"
+            val targetExact = 101
+            var matchOver = false
+            var winnerName: String? = null
+            var overshootMsg: String? = null
+
             val ratedPlayers = roundFinalPlayers.map { p ->
                 val bonus = if (p.id == 0) p0Bonus else p1Bonus
-                val totalWithBonus = p.roundScore + bonus
+                val thisRoundTotal = p.roundScore + bonus
+                val candidateTotal = p.totalScore + thisRoundTotal
+
+                val finalTotal: Int
+                when {
+                    candidateTotal == targetExact -> {
+                        // EXACT 101 HIT!
+                        finalTotal = targetExact
+                        matchOver = true
+                        winnerName = p.name
+                    }
+                    candidateTotal > targetExact -> {
+                        // OVERSHOT! Must hit EXACTLY 101.
+                        // Penalty: resets to 50 points so player must hit exactly 101 to win
+                        finalTotal = 50
+                        overshootMsg = "⚠️ ${p.name} hat sich mit $candidateTotal Pkt überworfen (>101) und fällt auf 50 Pkt zurück!"
+                    }
+                    else -> {
+                        // candidateTotal < targetExact
+                        finalTotal = candidateTotal
+                    }
+                }
+
                 p.copy(
-                    roundScore = totalWithBonus,
-                    totalScore = p.totalScore + totalWithBonus
+                    roundScore = thisRoundTotal,
+                    totalScore = finalTotal
                 )
             }
 
-            val maxTotal = ratedPlayers.maxOf { it.totalScore }
-            val matchOver = maxTotal >= currentState.targetScore
-            val winner = if (matchOver) {
-                ratedPlayers.maxByOrNull { it.totalScore }?.name
-            } else null
+            // If both hit exactly 101, the player with the higher round score wins
+            if (ratedPlayers.all { it.totalScore == targetExact }) {
+                winnerName = ratedPlayers.maxByOrNull { it.roundScore }?.name
+            }
 
             val finalState = currentState.copy(
                 stateVersion = currentVersion,
@@ -611,9 +616,10 @@ class OnlineManager {
                 currentTurnIndex = 0,
                 lastCaptorIndex = newLastCaptor,
                 isMatchOver = matchOver,
-                matchWinnerName = winner,
+                matchWinnerName = winnerName,
+                overshootMessage = overshootMsg,
                 showRoundEndSummary = true,
-                statusMessage = if (matchOver) "MATCH BEENDET! GEWINNER: $winner" else "RUNDE ${currentState.roundNumber} BEENDET!",
+                statusMessage = if (matchOver) "🏆 GEWINNER: $winnerName HAT GENAU 101 PUNKTE ERREICHT!" else (overshootMsg ?: "RUNDE ${currentState.roundNumber} BEENDET!"),
                 lastPistiMessage = pistiNotice,
                 isGameStarted = true
             )
@@ -637,7 +643,6 @@ class OnlineManager {
                 centerPile = newCenterPile,
                 players = finalPlayers,
                 currentTurnIndex = nextTurn,
-                starterPlayerIndex = nextStarterIndex,
                 lastCaptorIndex = newLastCaptor,
                 statusMessage = statusMsg,
                 lastPistiMessage = pistiNotice,
@@ -688,6 +693,7 @@ class OnlineManager {
             lastCaptorIndex = -1,
             roundNumber = currentState.roundNumber + 1,
             showRoundEndSummary = false,
+            overshootMessage = null,
             statusMessage = "RUNDE ${currentState.roundNumber + 1}! $starterName IST AM ZUG",
             lastPistiMessage = null,
             dealAnimTrigger = System.currentTimeMillis()
@@ -719,7 +725,7 @@ class OnlineManager {
         scope.launch(Dispatchers.IO) {
             try {
                 val req = Request.Builder()
-                    .url("https://ntfy.sh/pisti_room_$code/json?poll=1&since=12s")
+                    .url("https://ntfy.sh/pisti_room_$code/json?poll=1&since=5s")
                     .build()
                 client.newCall(req).execute().use { resp ->
                     if (resp.isSuccessful) {

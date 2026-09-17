@@ -609,10 +609,6 @@ fun OnlineGameScreen(navController: NavController, gameViewModel: GameViewModel)
 
     val isMyTurn = onlineState.currentTurnIndex == myPlayerId
 
-    var landedCounts by remember(onlineState.dealAnimTrigger) {
-        mutableStateOf<List<Int>?>(if (onlineState.dealAnimTrigger > 0L) listOf(0, 0) else null)
-    }
-
     val feltGradient = Brush.radialGradient(
         colors = listOf(Color(0xFF0F3B6A), Color(0xFF0A2548), Color(0xFF051428)),
         radius = 1200f
@@ -631,307 +627,323 @@ fun OnlineGameScreen(navController: NavController, gameViewModel: GameViewModel)
                 .border(1.5.dp, Color(0xFFD4AF37).copy(alpha = 0.35f), RoundedCornerShape(12.dp))
         )
 
-        // Top Left Status Pill
-        Box(
-            modifier = Modifier
-                .align(Alignment.TopStart)
-                .padding(top = 16.dp, start = 16.dp)
-                .background(Color.Black.copy(alpha = 0.65f), RoundedCornerShape(16.dp))
-                .border(1.dp, Color(0xFFD4AF37), RoundedCornerShape(16.dp))
-                .padding(horizontal = 10.dp, vertical = 6.dp)
-        ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Box(
-                    modifier = Modifier
-                        .size(8.dp)
-                        .background(Color.Green, CircleShape)
-                )
-                Spacer(modifier = Modifier.width(6.dp))
-                Text(
-                    text = "ONLINE | RAUM: ${onlineState.roomCode}",
-                    color = Color.White,
-                    fontSize = 11.sp,
-                    fontWeight = FontWeight.Bold
-                )
-            }
-        }
-
-        // Top Right Actions (Sync + Exit)
-        Row(
-            modifier = Modifier
-                .align(Alignment.TopEnd)
-                .padding(top = 16.dp, end = 16.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            // Manual Resync Button
-            IconButton(
-                onClick = { onlineManager.resyncState() },
-                modifier = Modifier
-                    .size(40.dp)
-                    .border(1.5.dp, Color(0xFFD4AF37).copy(alpha = 0.8f), CircleShape)
-                    .background(Color(0xFF072B1E), CircleShape)
-            ) {
-                Icon(
-                    Icons.Default.Refresh,
-                    contentDescription = "Synchronisieren",
-                    tint = PrimaryYellow,
-                    modifier = Modifier.size(20.dp)
-                )
-            }
-
-            // Exit Button
-            IconButton(
-                onClick = { showExitDialog = true },
-                modifier = Modifier
-                    .size(40.dp)
-                    .border(1.5.dp, Color(0xFFD4AF37).copy(alpha = 0.8f), CircleShape)
-                    .background(Color(0xFF072B1E), CircleShape)
-            ) {
-                Icon(
-                    Icons.Default.ExitToApp,
-                    contentDescription = "Raum verlassen",
-                    tint = Color.White,
-                    modifier = Modifier.size(20.dp)
-                )
-            }
-        }
-
-        // --- OPPONENT PLAYER (TOP CENTER) ---
+        // --- TOP AREA: HEADER & LIVE 101 SCOREBOARD ---
         Column(
             modifier = Modifier
                 .align(Alignment.TopCenter)
-                .padding(top = 12.dp),
+                .fillMaxWidth()
+                .padding(top = 10.dp, start = 8.dp, end = 8.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            // Opponent Name & Score Header
-            Box(
+            // Top Bar with Room Code, Sync & Exit Buttons
+            Row(
                 modifier = Modifier
-                    .background(Color.Black.copy(alpha = 0.6f), RoundedCornerShape(20.dp))
-                    .border(
-                        1.dp,
-                        if (onlineState.currentTurnIndex == opponentId) PrimaryYellow else Color.Transparent,
-                        RoundedCornerShape(20.dp)
-                    )
-                    .padding(horizontal = 14.dp, vertical = 4.dp)
+                    .fillMaxWidth()
+                    .padding(horizontal = 4.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                Text(
-                    text = "👤 ${opponentPlayer.name} | Pkt: ${opponentPlayer.totalScore} | Karten: ${opponentPlayer.capturedCount}",
-                    color = Color.White,
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.Bold
-                )
+                // Room Code Pill
+                Box(
+                    modifier = Modifier
+                        .background(Color.Black.copy(alpha = 0.7f), RoundedCornerShape(16.dp))
+                        .border(1.dp, Color(0xFFD4AF37), RoundedCornerShape(16.dp))
+                        .padding(horizontal = 10.dp, vertical = 5.dp)
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Box(
+                            modifier = Modifier
+                                .size(8.dp)
+                                .background(Color(0xFF00E676), CircleShape)
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            text = "ONLINE # ${onlineState.roomCode}",
+                            color = Color.White,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                }
+
+                // Action Buttons (Resync + Exit)
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    IconButton(
+                        onClick = { onlineManager.resyncState() },
+                        modifier = Modifier
+                            .size(36.dp)
+                            .background(Color(0xFF072B1E), CircleShape)
+                            .border(1.dp, Color(0xFFD4AF37).copy(alpha = 0.8f), CircleShape)
+                    ) {
+                        Icon(
+                            Icons.Default.Refresh,
+                            contentDescription = "Synchronisieren",
+                            tint = PrimaryYellow,
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
+
+                    IconButton(
+                        onClick = { showExitDialog = true },
+                        modifier = Modifier
+                            .size(36.dp)
+                            .background(Color(0xFF072B1E), CircleShape)
+                            .border(1.dp, Color(0xFFD4AF37).copy(alpha = 0.8f), CircleShape)
+                    ) {
+                        Icon(
+                            Icons.Default.ExitToApp,
+                            contentDescription = "Raum verlassen",
+                            tint = Color.White,
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
+                }
             }
 
-            Spacer(modifier = Modifier.height(8.dp))
+            Spacer(modifier = Modifier.height(6.dp))
 
-            // Opponent Hand (Facedown)
-            val opponentCardCount = if (landedCounts != null) landedCounts!![1] else opponentPlayer.hand.size
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                repeat(opponentCardCount) {
-                    PlaidCardBack(
-                        modifier = Modifier
-                            .width(52.dp)
-                            .height(76.dp)
-                            .shadow(3.dp, RoundedCornerShape(6.dp))
+            // DEDICATED LIVE SCOREBOARD (PUNKTE-ZÄHLER)
+            OnlineLiveScoreboard(
+                myPlayer = myPlayer,
+                opponentPlayer = opponentPlayer,
+                currentTurnIndex = onlineState.currentTurnIndex,
+                myPlayerId = myPlayerId,
+                roundNumber = onlineState.roundNumber,
+                targetScore = onlineState.targetScore,
+                deckSize = onlineState.deck.size
+            )
+
+            Spacer(modifier = Modifier.height(10.dp))
+
+            // OPPONENT HAND (FACEDOWN CARDS AT TOP)
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                val opponentCount = opponentPlayer.hand.size
+                if (opponentCount > 0) {
+                    repeat(opponentCount) {
+                        PlaidCardBack(
+                            modifier = Modifier
+                                .width(48.dp)
+                                .height(70.dp)
+                                .shadow(3.dp, RoundedCornerShape(6.dp))
+                        )
+                    }
+                } else {
+                    Text(
+                        text = "Keine Handkarten",
+                        color = Color.White.copy(alpha = 0.5f),
+                        fontSize = 11.sp
                     )
                 }
             }
         }
 
-        // --- DRAW DECK STOCK (TOP-LEFT OF CENTER) ---
+        // --- DRAW DECK STOCK (TOP-LEFT OF CENTER TABLE) ---
         if (onlineState.deck.isNotEmpty()) {
             Box(
                 modifier = Modifier
-                    .align(Alignment.TopStart)
-                    .padding(start = 24.dp, top = 135.dp),
+                    .align(Alignment.CenterStart)
+                    .padding(start = 16.dp),
                 contentAlignment = Alignment.TopEnd
             ) {
                 PlaidCardBack(
                     modifier = Modifier
-                        .width(52.dp)
-                        .height(76.dp)
+                        .width(50.dp)
+                        .height(74.dp)
                         .shadow(4.dp, RoundedCornerShape(6.dp))
                 )
                 Box(
                     modifier = Modifier
-                        .offset(x = 8.dp, y = (-8).dp)
-                        .background(Color.White, RoundedCornerShape(6.dp))
-                        .border(1.2.dp, Color.Black, RoundedCornerShape(6.dp))
-                        .padding(horizontal = 6.dp, vertical = 2.dp)
+                        .offset(x = 6.dp, y = (-6).dp)
+                        .background(PrimaryYellow, RoundedCornerShape(8.dp))
+                        .border(1.dp, Color.Black, RoundedCornerShape(8.dp))
+                        .padding(horizontal = 5.dp, vertical = 2.dp)
                 ) {
                     Text(
                         text = "${onlineState.deck.size}",
-                        color = Color.Black,
-                        fontSize = 11.sp,
+                        color = OnPrimaryYellow,
+                        fontSize = 10.sp,
                         fontWeight = FontWeight.ExtraBold
                     )
                 }
             }
         }
 
-        // --- CENTER TABLE (SCOREBOARD & PILE) ---
+        // --- CENTER TABLE: STACKED PLAYED CARDS & ANNOUNCEMENTS ---
         Column(
             modifier = Modifier
                 .align(Alignment.Center)
-                .padding(bottom = 10.dp),
+                .fillMaxWidth(0.75f),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            // Live Score Board
-            Box(
-                modifier = Modifier
-                    .background(Color.Black.copy(alpha = 0.75f), RoundedCornerShape(12.dp))
-                    .border(1.dp, Color(0xFFD4AF37), RoundedCornerShape(12.dp))
-                    .padding(horizontal = 12.dp, vertical = 6.dp)
-            ) {
-                Text(
-                    text = "RUNDE ${onlineState.roundNumber} | ZIEL: ${onlineState.targetScore} PKT",
-                    color = PrimaryYellow,
-                    fontSize = 11.sp,
-                    fontWeight = FontWeight.ExtraBold
-                )
+            // Pişti Alert or Overshoot Banner
+            if (onlineState.lastPistiMessage != null) {
+                Box(
+                    modifier = Modifier
+                        .background(Color(0xFFD32F2F), RoundedCornerShape(12.dp))
+                        .border(1.5.dp, PrimaryYellow, RoundedCornerShape(12.dp))
+                        .padding(horizontal = 14.dp, vertical = 6.dp)
+                ) {
+                    Text(
+                        text = onlineState.lastPistiMessage ?: "",
+                        color = Color.White,
+                        fontWeight = FontWeight.ExtraBold,
+                        fontSize = 14.sp,
+                        textAlign = TextAlign.Center
+                    )
+                }
+                Spacer(modifier = Modifier.height(8.dp))
+            } else if (onlineState.overshootMessage != null) {
+                Box(
+                    modifier = Modifier
+                        .background(Color(0xFFB71C1C), RoundedCornerShape(12.dp))
+                        .border(1.5.dp, PrimaryYellow, RoundedCornerShape(12.dp))
+                        .padding(horizontal = 12.dp, vertical = 4.dp)
+                ) {
+                    Text(
+                        text = onlineState.overshootMessage ?: "",
+                        color = Color.White,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 12.sp,
+                        textAlign = TextAlign.Center
+                    )
+                }
+                Spacer(modifier = Modifier.height(8.dp))
             }
 
-            Spacer(modifier = Modifier.height(8.dp))
-
-            // Turn Banner / Pişti Notice
-            if (onlineState.lastPistiMessage != null) {
-                Text(
-                    text = onlineState.lastPistiMessage ?: "",
-                    color = PrimaryYellow,
-                    fontWeight = FontWeight.ExtraBold,
-                    fontSize = 18.sp,
-                    modifier = Modifier.padding(bottom = 8.dp)
-                )
-            } else {
+            // Turn Info Pill
+            Box(
+                modifier = Modifier
+                    .background(
+                        if (isMyTurn) Color(0xFF1B5E20) else Color.Black.copy(alpha = 0.65f),
+                        RoundedCornerShape(16.dp)
+                    )
+                    .border(
+                        1.2.dp,
+                        if (isMyTurn) PrimaryYellow else Color.White.copy(alpha = 0.3f),
+                        RoundedCornerShape(16.dp)
+                    )
+                    .padding(horizontal = 12.dp, vertical = 4.dp)
+            ) {
                 Text(
                     text = if (isMyTurn) "⭐ DU BIST AM ZUG!" else "⏳ ${opponentPlayer.name} IST AM ZUG...",
-                    color = if (isMyTurn) PrimaryYellow else Color.White.copy(alpha = 0.9f),
-                    fontSize = 14.sp,
-                    fontWeight = FontWeight.Bold,
-                    modifier = Modifier.padding(bottom = 8.dp)
-                )
-            }
-
-            // Center Played Cards Stack
-            Box(
-                modifier = Modifier
-                    .height(105.dp)
-                    .fillMaxWidth(0.6f),
-                contentAlignment = Alignment.Center
-            ) {
-                if (onlineState.centerPile.isEmpty()) {
-                    Box(
-                        modifier = Modifier
-                            .width(62.dp)
-                            .height(90.dp)
-                            .border(1.5.dp, Color.White.copy(alpha = 0.25f), RoundedCornerShape(6.dp)),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Text("Tisch leer", color = Color.White.copy(alpha = 0.4f), fontSize = 11.sp)
-                    }
-                } else {
-                    val topCard = onlineState.centerPile.last()
-                    Box(contentAlignment = Alignment.TopEnd) {
-                        Box(contentAlignment = Alignment.Center) {
-                            if (onlineState.centerPile.size > 1) {
-                                PlaidCardBack(
-                                    modifier = Modifier
-                                        .width(62.dp)
-                                        .height(90.dp)
-                                        .offset(x = (-3).dp, y = 3.dp)
-                                        .shadow(2.dp, RoundedCornerShape(6.dp))
-                                )
-                            }
-                            OnlineCardView(
-                                card = topCard,
-                                modifier = Modifier
-                                    .width(62.dp)
-                                    .height(90.dp)
-                                    .shadow(4.dp, RoundedCornerShape(6.dp))
-                            )
-                        }
-
-                        if (onlineState.centerPile.size > 1) {
-                            Box(
-                                modifier = Modifier
-                                    .offset(x = 8.dp, y = (-8).dp)
-                                    .background(PrimaryYellow, CircleShape)
-                                    .padding(horizontal = 6.dp, vertical = 2.dp)
-                            ) {
-                                Text(
-                                    text = "${onlineState.centerPile.size}",
-                                    color = OnPrimaryYellow,
-                                    fontSize = 11.sp,
-                                    fontWeight = FontWeight.Bold
-                                )
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        // --- HUMAN PLAYER (BOTTOM CENTER) ---
-        Column(
-            modifier = Modifier
-                .align(Alignment.BottomCenter)
-                .padding(bottom = 16.dp),
-            horizontalAlignment = Alignment.CenterHorizontally
-        ) {
-            // Your Name & Score Header
-            Box(
-                modifier = Modifier
-                    .background(Color.Black.copy(alpha = 0.6f), RoundedCornerShape(20.dp))
-                    .border(
-                        1.5.dp,
-                        if (isMyTurn) PrimaryYellow else Color.Transparent,
-                        RoundedCornerShape(20.dp)
-                    )
-                    .padding(horizontal = 16.dp, vertical = 5.dp)
-            ) {
-                Text(
-                    text = "👤 ${myPlayer.name} (DU) | Pkt: ${myPlayer.totalScore} | Karten: ${myPlayer.capturedCount}",
                     color = if (isMyTurn) PrimaryYellow else Color.White,
-                    fontSize = 13.sp,
-                    fontWeight = FontWeight.Bold
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.ExtraBold
                 )
             }
 
             Spacer(modifier = Modifier.height(10.dp))
 
-            // Your Interactive Hand Cards
-            val myHandToDisplay = if (landedCounts != null) myPlayer.hand.take(landedCounts!![0]) else myPlayer.hand
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                myHandToDisplay.forEachIndexed { index, card ->
-                    OnlineCardView(
-                        card = card,
+            // Center Table Stack (Identical stack styling to offline mode)
+            Box(
+                modifier = Modifier
+                    .height(115.dp)
+                    .fillMaxWidth(),
+                contentAlignment = Alignment.Center
+            ) {
+                if (onlineState.centerPile.isEmpty()) {
+                    Box(
                         modifier = Modifier
-                            .width(64.dp)
-                            .height(92.dp)
-                            .shadow(if (isMyTurn && landedCounts == null) 8.dp else 2.dp, RoundedCornerShape(6.dp))
-                            .border(
-                                if (isMyTurn && landedCounts == null) 1.5.dp else 0.dp,
-                                if (isMyTurn && landedCounts == null) PrimaryYellow else Color.Transparent,
-                                RoundedCornerShape(6.dp)
-                            )
-                            .clickable(enabled = isMyTurn && landedCounts == null) {
-                                onlineManager.playCard(index)
+                            .width(68.dp)
+                            .height(100.dp)
+                            .border(1.5.dp, Color.White.copy(alpha = 0.25f), RoundedCornerShape(8.dp)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = "Tisch leer",
+                            color = Color.White.copy(alpha = 0.45f),
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Medium
+                        )
+                    }
+                } else {
+                    val topCardDto = onlineState.centerPile.last()
+                    val topCard = topCardDto.toCard()
+
+                    Box(contentAlignment = Alignment.TopEnd) {
+                        Box(contentAlignment = Alignment.Center) {
+                            if (onlineState.centerPile.size > 1) {
+                                PlaidCardBack(
+                                    modifier = Modifier
+                                        .width(72.dp)
+                                        .height(106.dp)
+                                        .offset(x = (-4).dp, y = 4.dp)
+                                        .shadow(3.dp, RoundedCornerShape(8.dp))
+                                )
                             }
-                    )
+                            PlayingCardView(
+                                card = topCard,
+                                cardWidth = 72.dp,
+                                cardHeight = 106.dp,
+                                modifier = Modifier.shadow(6.dp, RoundedCornerShape(8.dp))
+                            )
+                        }
+
+                        // Center Pile Count Badge
+                        if (onlineState.centerPile.size > 1) {
+                            Box(
+                                modifier = Modifier
+                                    .offset(x = 10.dp, y = (-10).dp)
+                                    .background(PrimaryYellow, RoundedCornerShape(10.dp))
+                                    .border(1.dp, Color.Black, RoundedCornerShape(10.dp))
+                                    .padding(horizontal = 7.dp, vertical = 2.dp)
+                            ) {
+                                Text(
+                                    text = "${onlineState.centerPile.size}",
+                                    color = Color.Black,
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.ExtraBold
+                                )
+                            }
+                        }
+                    }
                 }
             }
         }
 
-        // --- 2-PLAYER ANIMATED CARD DEALING OVERLAY ---
-        OnlineCardDealAnimOverlay(
-            trigger = onlineState.dealAnimTrigger,
-            humanHand = myPlayer.hand,
-            onLandedCountsChanged = { newLanded -> landedCounts = newLanded },
-            onAnimFinished = { landedCounts = null }
-        )
+        // --- BOTTOM AREA: HUMAN PLAYER HAND (IDENTICAL FANNED STYLING) ---
+        Column(
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .fillMaxWidth()
+                .padding(bottom = 14.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            val domainHand = myPlayer.hand.map { it.toCard() }
+            val domainCenter = onlineState.centerPile.map { it.toCard() }
+
+            // Fanned Hand using the exact same smooth, non-flickering Composable as offline mode!
+            FannedPlayerHand(
+                hand = domainHand,
+                isMyTurn = isMyTurn,
+                centerPile = domainCenter,
+                onCardClick = { clickedCard ->
+                    if (isMyTurn) {
+                        val cardIndex = myPlayer.hand.indexOfFirst {
+                            it.suit == clickedCard.suit.name && it.rank == clickedCard.rank.name
+                        }
+                        if (cardIndex != -1) {
+                            onlineManager.playCard(cardIndex)
+                        }
+                    }
+                },
+                modifier = Modifier.padding(bottom = 4.dp)
+            )
+        }
+
+        // --- SMOOTH 2-PLAYER CARD DEALING OVERLAY ---
+        if (onlineState.dealAnimTrigger > 0L) {
+            OnlineDealingAnimation(
+                trigger = onlineState.dealAnimTrigger,
+                humanHand = myPlayer.hand
+            )
+        }
     }
 
-    // ROUND END SUMMARY DIALOG
+    // ROUND END SUMMARY DIALOG (WITH EXACT 101 RULES EXPLANATION)
     if (onlineState.showRoundEndSummary && !onlineState.isMatchOver) {
         val isHost = myPlayerId == 0
         AlertDialog(
@@ -945,38 +957,73 @@ fun OnlineGameScreen(navController: NavController, gameViewModel: GameViewModel)
                 )
             },
             text = {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     Text(
-                        "Punktestand (Ziel: ${onlineState.targetScore} Punkte):",
-                        color = Color.White.copy(alpha = 0.9f),
+                        "🎯 Ziel: Genau 101 Punkte!",
+                        color = PrimaryYellow,
                         fontSize = 13.sp,
-                        fontWeight = FontWeight.SemiBold
+                        fontWeight = FontWeight.ExtraBold
                     )
+                    Text(
+                        "Der Gewinner muss exakt 101 Punkte erreichen. Wer mehr als 101 Punkte erzielt, überwirft sich und fällt auf 50 Punkte zurück!",
+                        color = Color.White.copy(alpha = 0.85f),
+                        fontSize = 11.sp
+                    )
+
+                    Spacer(modifier = Modifier.height(4.dp))
+
                     onlineState.players.forEach { p ->
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween
+                        val isMe = p.id == myPlayerId
+                        val needed = 101 - p.totalScore
+                        Card(
+                            colors = CardDefaults.cardColors(containerColor = Color.White.copy(alpha = 0.1f)),
+                            shape = RoundedCornerShape(8.dp),
+                            modifier = Modifier.fillMaxWidth()
                         ) {
-                            Text(
-                                text = p.name + if (p.id == myPlayerId) " (Du)" else "",
-                                color = Color.White,
-                                fontWeight = FontWeight.Bold,
-                                fontSize = 14.sp
-                            )
-                            Text(
-                                text = "${p.totalScore} Pkt (+${p.roundScore} R)",
-                                color = PrimaryYellow,
-                                fontWeight = FontWeight.Bold,
-                                fontSize = 14.sp
-                            )
+                            Column(modifier = Modifier.padding(10.dp)) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Text(
+                                        text = p.name + if (isMe) " (Du)" else "",
+                                        color = if (isMe) PrimaryYellow else Color.White,
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 14.sp
+                                    )
+                                    Text(
+                                        text = "${p.totalScore} / 101 Pkt",
+                                        color = PrimaryYellow,
+                                        fontWeight = FontWeight.ExtraBold,
+                                        fontSize = 14.sp
+                                    )
+                                }
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Text(
+                                        text = "+${p.roundScore} in dieser Rd • ${p.capturedCount} Karten",
+                                        color = Color.White.copy(alpha = 0.7f),
+                                        fontSize = 11.sp
+                                    )
+                                    Text(
+                                        text = if (needed > 0) "Noch $needed bis 101" else "Exakt 101!",
+                                        color = if (needed > 0) Color.White.copy(alpha = 0.9f) else Color(0xFF00E676),
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                }
+                            }
                         }
                     }
+
                     if (!isHost) {
                         Text(
                             "Warte auf Host für nächste Runde...",
                             color = Color.White.copy(alpha = 0.7f),
                             fontSize = 12.sp,
-                            modifier = Modifier.padding(top = 8.dp)
+                            modifier = Modifier.padding(top = 4.dp)
                         )
                     }
                 }
@@ -995,7 +1042,7 @@ fun OnlineGameScreen(navController: NavController, gameViewModel: GameViewModel)
         )
     }
 
-    // MATCH OVER DIALOG
+    // MATCH OVER DIALOG (EXACT 101 HIT)
     if (onlineState.isMatchOver) {
         AlertDialog(
             onDismissRequest = { },
@@ -1008,19 +1055,27 @@ fun OnlineGameScreen(navController: NavController, gameViewModel: GameViewModel)
                 )
             },
             text = {
-                Column {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text(
                         "GEWINNER: ${onlineState.matchWinnerName ?: "Unentschieden"}",
-                        color = Color.White,
-                        fontWeight = FontWeight.Bold,
+                        color = Color(0xFF00E676),
+                        fontWeight = FontWeight.ExtraBold,
                         fontSize = 16.sp
                     )
-                    Spacer(modifier = Modifier.height(8.dp))
                     Text(
-                        "${myPlayer.name}: ${myPlayer.totalScore} Punkte\n${opponentPlayer.name}: ${opponentPlayer.totalScore} Punkte",
-                        color = Color.White.copy(alpha = 0.8f),
-                        fontSize = 14.sp
+                        "Hat genau 101 Punkte erreicht!",
+                        color = PrimaryYellow,
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Bold
                     )
+                    Spacer(modifier = Modifier.height(6.dp))
+                    onlineState.players.forEach { p ->
+                        Text(
+                            "${p.name}: ${p.totalScore} Punkte",
+                            color = Color.White.copy(alpha = 0.85f),
+                            fontSize = 14.sp
+                        )
+                    }
                 }
             },
             confirmButton = {
@@ -1070,154 +1125,253 @@ fun OnlineGameScreen(navController: NavController, gameViewModel: GameViewModel)
     }
 }
 
-// --- ONLINE CARD RENDERER COMPOSABLE ---
+// --- DEDICATED LIVE 2-PLAYER SCOREBOARD COMPOSABLE (PUNKTE-ZÄHLER) ---
 
 @Composable
-fun OnlineCardView(card: OnlineCardDto, modifier: Modifier = Modifier) {
-    val suitSymbol = when (card.suit) {
-        "HEARTS" -> "♥"
-        "DIAMONDS" -> "♦"
-        "CLUBS" -> "♣"
-        else -> "♠"
-    }
+fun OnlineLiveScoreboard(
+    myPlayer: OnlinePlayerDto,
+    opponentPlayer: OnlinePlayerDto,
+    currentTurnIndex: Int,
+    myPlayerId: Int,
+    roundNumber: Int,
+    targetScore: Int = 101,
+    deckSize: Int = 0,
+    modifier: Modifier = Modifier
+) {
+    val isMyTurn = currentTurnIndex == myPlayerId
+    val isOpponentTurn = currentTurnIndex == opponentPlayer.id
 
-    val rankSymbol = when (card.rank) {
-        "TWO" -> "2"
-        "THREE" -> "3"
-        "FOUR" -> "4"
-        "FIVE" -> "5"
-        "SIX" -> "6"
-        "SEVEN" -> "7"
-        "EIGHT" -> "8"
-        "NINE" -> "9"
-        "TEN" -> "10"
-        "JACK" -> "J"
-        "QUEEN" -> "Q"
-        "KING" -> "K"
-        "ACE" -> "A"
-        else -> card.rank
-    }
-
-    val color = if (card.suit == "HEARTS" || card.suit == "DIAMONDS") Color(0xFFD32F2F) else Color(0xFF212121)
-
-    Box(
+    Surface(
         modifier = modifier
-            .background(Color.White, RoundedCornerShape(6.dp))
-            .border(1.dp, Color.Black.copy(alpha = 0.2f), RoundedCornerShape(6.dp))
-            .padding(4.dp)
+            .fillMaxWidth()
+            .padding(horizontal = 4.dp),
+        shape = RoundedCornerShape(12.dp),
+        color = Color.Black.copy(alpha = 0.75f),
+        border = androidx.compose.foundation.BorderStroke(1.5.dp, PrimaryYellow.copy(alpha = 0.85f)),
+        shadowElevation = 8.dp
     ) {
-        // Top-Left Corner Rank & Suit
         Column(
-            modifier = Modifier.align(Alignment.TopStart),
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            Text(
-                text = rankSymbol,
-                color = color,
-                fontSize = 11.sp,
-                fontWeight = FontWeight.ExtraBold,
-                lineHeight = 11.sp
-            )
-            Text(
-                text = suitSymbol,
-                color = color,
-                fontSize = 9.sp,
-                lineHeight = 9.sp
-            )
-        }
+            // Header: Target & Round
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = "🏆 PUNKTESTAND",
+                        color = PrimaryYellow,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.ExtraBold
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        text = "• Rd $roundNumber",
+                        color = Color.White.copy(alpha = 0.8f),
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Medium
+                    )
+                }
+                Text(
+                    text = "🎯 Ziel: Exakt $targetScore Pkt",
+                    color = PrimaryYellow,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.ExtraBold
+                )
+            }
 
-        // Center Suit Icon
-        Text(
-            text = suitSymbol,
-            color = color,
-            fontSize = 22.sp,
-            modifier = Modifier.align(Alignment.Center)
-        )
+            Spacer(modifier = Modifier.height(4.dp))
 
-        // Bottom-Right Corner (Inverted)
-        Column(
-            modifier = Modifier
-                .align(Alignment.BottomEnd)
-                .rotate(180f),
-            horizontalAlignment = Alignment.CenterHorizontally
-        ) {
-            Text(
-                text = rankSymbol,
-                color = color,
-                fontSize = 11.sp,
-                fontWeight = FontWeight.ExtraBold,
-                lineHeight = 11.sp
-            )
-            Text(
-                text = suitSymbol,
-                color = color,
-                fontSize = 9.sp,
-                lineHeight = 9.sp
-            )
+            // Player Columns (Side-by-Side: You vs Friend)
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                // Player Box: YOU
+                PlayerScoreCard(
+                    name = "${myPlayer.name} (DU)",
+                    totalScore = myPlayer.totalScore,
+                    roundScore = myPlayer.roundScore,
+                    capturedCount = myPlayer.capturedCount,
+                    pistiCount = myPlayer.pistiCount,
+                    isTurn = isMyTurn,
+                    modifier = Modifier.weight(1f)
+                )
+
+                // Player Box: OPPONENT
+                PlayerScoreCard(
+                    name = opponentPlayer.name,
+                    totalScore = opponentPlayer.totalScore,
+                    roundScore = opponentPlayer.roundScore,
+                    capturedCount = opponentPlayer.capturedCount,
+                    pistiCount = opponentPlayer.pistiCount,
+                    isTurn = isOpponentTurn,
+                    modifier = Modifier.weight(1f)
+                )
+            }
         }
     }
 }
 
-// --- 2-PLAYER ANIMATED CARD DEALING OVERLAY ---
-
 @Composable
-fun OnlineCardDealAnimOverlay(
-    trigger: Long,
-    humanHand: List<OnlineCardDto>,
-    onLandedCountsChanged: (List<Int>) -> Unit,
-    onAnimFinished: () -> Unit,
+private fun PlayerScoreCard(
+    name: String,
+    totalScore: Int,
+    roundScore: Int,
+    capturedCount: Int,
+    pistiCount: Int,
+    isTurn: Boolean,
     modifier: Modifier = Modifier
 ) {
-    if (trigger <= 0L) return
+    val progress = (totalScore.coerceIn(0, 101) / 101f)
+    val needed = 101 - totalScore
 
-    var isAnimating by remember(trigger) { mutableStateOf(true) }
-    val animProgress = remember(trigger) { androidx.compose.animation.core.Animatable(0f) }
-
-    LaunchedEffect(trigger) {
-        isAnimating = true
-        onLandedCountsChanged(listOf(0, 0))
-        animProgress.snapTo(0f)
-        animProgress.animateTo(
-            targetValue = 1f,
-            animationSpec = tween(durationMillis = 1100, easing = LinearEasing)
-        )
-        isAnimating = false
-        onAnimFinished()
-    }
-
-    if (isAnimating) {
-        BoxWithConstraints(modifier = modifier.fillMaxSize()) {
-            val w = maxWidth.value
-            val h = maxHeight.value
-
-            val deckX = 24f
-            val deckY = 135f
-            val progress = animProgress.value
-            val totalCards = 8 // 4 to Bottom (human), 4 to Top (opponent)
-
-            val currentLanded = mutableListOf(0, 0)
-            for (i in 0 until totalCards) {
-                val pIdx = i % 2 // 0 = Bottom (Human), 1 = Top (Opponent)
-                val slot = i / 2
-                val cardStart = (i * 0.08f).coerceAtMost(0.65f)
-                val cardEnd = (cardStart + 0.35f).coerceAtMost(1f)
-
-                if (progress >= cardEnd) {
-                    if (slot + 1 > currentLanded[pIdx]) {
-                        currentLanded[pIdx] = slot + 1
+    Box(
+        modifier = modifier
+            .background(
+                color = if (isTurn) Color(0xFF1B5E20) else Color.White.copy(alpha = 0.08f),
+                shape = RoundedCornerShape(8.dp)
+            )
+            .border(
+                width = if (isTurn) 1.5.dp else 0.5.dp,
+                color = if (isTurn) PrimaryYellow else Color.White.copy(alpha = 0.25f),
+                shape = RoundedCornerShape(8.dp)
+            )
+            .padding(vertical = 5.dp, horizontal = 6.dp)
+    ) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            // Player Name + Turn Badge
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.Center,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text(
+                    text = name,
+                    color = if (isTurn) PrimaryYellow else Color.White,
+                    fontSize = 11.sp,
+                    fontWeight = if (isTurn) FontWeight.ExtraBold else FontWeight.Bold,
+                    maxLines = 1
+                )
+                if (isTurn) {
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Box(
+                        modifier = Modifier
+                            .background(PrimaryYellow, RoundedCornerShape(3.dp))
+                            .padding(horizontal = 4.dp, vertical = 1.dp)
+                    ) {
+                        Text(
+                            text = "AM ZUG",
+                            color = Color.Black,
+                            fontSize = 8.sp,
+                            fontWeight = FontWeight.ExtraBold
+                        )
                     }
                 }
             }
 
-            SideEffect {
-                onLandedCountsChanged(currentLanded.toList())
+            Spacer(modifier = Modifier.height(2.dp))
+
+            // Score Counter (X / 101)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = "$totalScore",
+                    color = Color.White,
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.ExtraBold
+                )
+                Text(
+                    text = " / 101 Pkt",
+                    color = Color.White.copy(alpha = 0.7f),
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Bold
+                )
+                if (roundScore > 0) {
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text(
+                        text = "(+$roundScore)",
+                        color = PrimaryYellow,
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
             }
 
+            // Progress Bar towards 101
+            Spacer(modifier = Modifier.height(3.dp))
+            LinearProgressIndicator(
+                progress = { progress },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(4.dp)
+                    .clip(RoundedCornerShape(2.dp)),
+                color = PrimaryYellow,
+                trackColor = Color.White.copy(alpha = 0.15f)
+            )
+
+            // Subtitle Details: Karten, Piştis, Needed
+            Spacer(modifier = Modifier.height(3.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Text(
+                    text = "$capturedCount K | $pistiCount P",
+                    color = Color.White.copy(alpha = 0.75f),
+                    fontSize = 9.sp
+                )
+                Text(
+                    text = if (needed > 0) "Noch $needed" else "Ziel 101!",
+                    color = if (needed > 0) Color.White.copy(alpha = 0.85f) else Color(0xFF00E676),
+                    fontSize = 9.sp,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+        }
+    }
+}
+
+// --- SMOOTH 2-PLAYER CARD DEALING OVERLAY ---
+
+@Composable
+fun OnlineDealingAnimation(
+    trigger: Long,
+    humanHand: List<OnlineCardDto>,
+    modifier: Modifier = Modifier
+) {
+    if (trigger <= 0L) return
+
+    var isVisible by remember(trigger) { mutableStateOf(true) }
+    val animProgress = remember(trigger) { Animatable(0f) }
+
+    LaunchedEffect(trigger) {
+        isVisible = true
+        animProgress.snapTo(0f)
+        animProgress.animateTo(
+            targetValue = 1f,
+            animationSpec = tween(durationMillis = 850, easing = FastOutSlowInEasing)
+        )
+        isVisible = false
+    }
+
+    if (isVisible) {
+        BoxWithConstraints(modifier = modifier.fillMaxSize()) {
+            val w = maxWidth.value
+            val h = maxHeight.value
+            val progress = animProgress.value
+
+            val deckX = 16f
+            val deckY = h * 0.5f - 37f
+
+            val totalCards = 8
             for (i in 0 until totalCards) {
-                val pIdx = i % 2
+                val pIdx = i % 2 // 0 = Human, 1 = Opponent
                 val slot = i / 2
-                val cardStart = (i * 0.08f).coerceAtMost(0.65f)
-                val cardEnd = (cardStart + 0.35f).coerceAtMost(1f)
+                val cardStart = (i * 0.06f).coerceAtMost(0.55f)
+                val cardEnd = (cardStart + 0.40f).coerceAtMost(1f)
 
                 if (progress in cardStart..cardEnd) {
                     val cardProgress = ((progress - cardStart) / (cardEnd - cardStart)).coerceIn(0f, 1f)
@@ -1231,76 +1385,59 @@ fun OnlineCardDealAnimOverlay(
                         // Human Player (Bottom)
                         val handCount = 4
                         val centerIndex = (handCount - 1) / 2f
-                        val xOffset = (slot - centerIndex) * 56f
-                        val dist = Math.abs(slot - centerIndex)
-                        val yOffset = dist * dist * 3f
-
-                        targetX = w * 0.5f + xOffset - 32f
-                        targetY = h - 130f - yOffset
-                        targetAngle = -10f + slot * (20f / (handCount - 1))
+                        val xOffset = (slot - centerIndex) * 52f
+                        targetX = w * 0.5f + xOffset - 36f
+                        targetY = h - 130f
+                        targetAngle = -8f + slot * 5f
                     } else {
                         // Opponent (Top)
                         val handCount = 4
                         val centerIndex = (handCount - 1) / 2f
                         val xOffset = (slot - centerIndex) * 44f
-                        targetX = w * 0.5f + xOffset - 26f
-                        targetY = 48f
+                        targetX = w * 0.5f + xOffset - 24f
+                        targetY = 80f
                         targetAngle = -6f + slot * 4f
                     }
 
-                    val arcHeight = kotlin.math.sin(cardProgress * Math.PI).toFloat() * 45f
+                    val arcHeight = kotlin.math.sin(cardProgress * Math.PI).toFloat() * 35f
                     val curX = deckX + (targetX - deckX) * eased
                     val curY = deckY + (targetY - deckY) * eased - arcHeight
 
-                    if (pIdx == 0) {
-                        // 3D Flip face-up for human hand
-                        val flipAngle = cardProgress * 180f
-                        val card = humanHand.getOrNull(slot)
-                        Box(
+                    Box(
+                        modifier = Modifier
+                            .offset(x = curX.dp, y = curY.dp)
+                            .rotate(targetAngle * cardProgress)
+                    ) {
+                        PlaidCardBack(
                             modifier = Modifier
-                                .offset(x = curX.dp, y = curY.dp)
-                                .rotate(targetAngle * cardProgress)
-                                .graphicsLayer {
-                                    rotationY = flipAngle
-                                    cameraDistance = 12f * density
-                                }
-                        ) {
-                            if (cardProgress < 0.5f) {
-                                PlaidCardBack(
-                                    modifier = Modifier
-                                        .width(64.dp)
-                                        .height(92.dp)
-                                        .shadow(6.dp, RoundedCornerShape(6.dp))
-                                )
-                            } else if (card != null) {
-                                Box(modifier = Modifier.graphicsLayer { rotationY = 180f }) {
-                                    OnlineCardView(
-                                        card = card,
-                                        modifier = Modifier
-                                            .width(64.dp)
-                                            .height(92.dp)
-                                            .shadow(6.dp, RoundedCornerShape(6.dp))
-                                    )
-                                }
-                            }
-                        }
-                    } else {
-                        // Facedown for opponent
-                        Box(
-                            modifier = Modifier
-                                .offset(x = curX.dp, y = curY.dp)
-                                .rotate(targetAngle * cardProgress)
-                        ) {
-                            PlaidCardBack(
-                                modifier = Modifier
-                                    .width(52.dp)
-                                    .height(76.dp)
-                                    .shadow(4.dp, RoundedCornerShape(6.dp))
-                            )
-                        }
+                                .width(if (pIdx == 0) 64.dp else 48.dp)
+                                .height(if (pIdx == 0) 94.dp else 70.dp)
+                                .shadow(4.dp, RoundedCornerShape(6.dp))
+                        )
                     }
                 }
             }
         }
     }
 }
+
+// --- BACKWARDS COMPATIBLE ONLINE CARD RENDERER COMPOSABLE ---
+
+@Composable
+fun OnlineCardView(
+    card: OnlineCardDto,
+    modifier: Modifier = Modifier,
+    highlightType: CardHighlightType = CardHighlightType.NONE,
+    onClick: (() -> Unit)? = null
+) {
+    PlayingCardView(
+        card = card.toCard(),
+        cardWidth = 64.dp,
+        cardHeight = 92.dp,
+        highlightType = highlightType,
+        modifier = modifier,
+        onClick = onClick
+    )
+}
+
+
