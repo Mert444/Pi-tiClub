@@ -43,6 +43,7 @@ data class GameState(
         PlayerInfo(3, "Sokrates", isHuman = false)
     ),
     val currentTurnIndex: Int = 0, // 0 = Spieler, 1 = Plato, 2 = Euklid, 3 = Sokrates
+    val starterPlayerIndex: Int = 0, // Player who started current round
     val lastCaptorIndex: Int = -1,
     val roundNumber: Int = 1,
     val targetScore: Int = 501,
@@ -140,6 +141,7 @@ class GameViewModel : ViewModel() {
     }
 
     fun startNewMatch() {
+        val initialStarter = kotlin.random.Random.nextInt(4)
         _state.update {
             it.copy(
                 roundNumber = 1,
@@ -147,6 +149,7 @@ class GameViewModel : ViewModel() {
                 isMatchOver = false,
                 matchWinnerName = null,
                 showRoundEndSummary = false,
+                starterPlayerIndex = initialStarter,
                 players = listOf(
                     PlayerInfo(0, _state.value.playerName, isHuman = true, totalScore = 0),
                     PlayerInfo(1, "Plato", isHuman = false, totalScore = 0),
@@ -156,10 +159,10 @@ class GameViewModel : ViewModel() {
             )
         }
         startMatchTimer()
-        startNewRound()
+        startNewRound(isMatchStart = true)
     }
 
-    fun startNewRound() {
+    fun startNewRound(isMatchStart: Boolean = false) {
         val fullDeck = mutableListOf<Card>()
         Suit.values().forEach { suit ->
             Rank.values().forEach { rank ->
@@ -184,10 +187,17 @@ class GameViewModel : ViewModel() {
         }
         remaining = remaining.drop(16)
 
-        // Randomly select starting player (0 = Human, 1 = Plato, 2 = Euklid, 3 = Sokrates)
-        val startingPlayerIndex = kotlin.random.Random.nextInt(4)
+        // Select starting player:
+        // On match start: use the initial randomly selected starter.
+        // On subsequent rounds: rotate starting player clockwise so every player gets fair turns starting!
+        val startingPlayerIndex = if (isMatchStart) {
+            _state.value.starterPlayerIndex
+        } else {
+            (_state.value.starterPlayerIndex + 1) % 4
+        }
+
         val starterName = resetPlayers[startingPlayerIndex].name
-        val statusMsg = if (startingPlayerIndex == 0) "DU BIST AM ZUG" else "$starterName fängt an..."
+        val statusMsg = if (startingPlayerIndex == 0) "DU FÄNGST DIESE RUNDE AN!" else "$starterName fängt an..."
 
         _state.update {
             it.copy(
@@ -195,6 +205,7 @@ class GameViewModel : ViewModel() {
                 centerPile = center,
                 players = resetPlayers,
                 currentTurnIndex = startingPlayerIndex,
+                starterPlayerIndex = startingPlayerIndex,
                 lastCaptorIndex = -1,
                 showRoundEndSummary = false,
                 statusMessage = statusMsg,
@@ -204,7 +215,7 @@ class GameViewModel : ViewModel() {
 
         if (startingPlayerIndex != 0) {
             viewModelScope.launch {
-                delay(1400)
+                delay(900)
                 executeBotTurn(startingPlayerIndex)
             }
         }
@@ -385,9 +396,9 @@ class GameViewModel : ViewModel() {
                 }
                 newRemaining = newRemaining.drop(16)
 
-                val startingPlayerIndex = kotlin.random.Random.nextInt(4)
+                val startingPlayerIndex = (currentState.starterPlayerIndex + 1) % 4
                 val starterName = newResetPlayers[startingPlayerIndex].name
-                val statusMsg = if (startingPlayerIndex == 0) "KARTEN NEU GEMISCHT - DU BIST AM ZUG" else "NEU GEMISCHT - $starterName fängt an..."
+                val statusMsg = if (startingPlayerIndex == 0) "KARTEN NEU GEMISCHT - DU FÄNGST AN!" else "NEU GEMISCHT - $starterName fängt an..."
 
                 _state.update {
                     it.copy(
@@ -395,6 +406,7 @@ class GameViewModel : ViewModel() {
                         centerPile = newCenter,
                         players = newResetPlayers,
                         currentTurnIndex = startingPlayerIndex,
+                        starterPlayerIndex = startingPlayerIndex,
                         lastCaptorIndex = -1,
                         roundNumber = nextRoundNum,
                         showRoundEndSummary = false,
@@ -406,7 +418,7 @@ class GameViewModel : ViewModel() {
 
                 if (startingPlayerIndex != 0) {
                     viewModelScope.launch {
-                        delay(1400)
+                        delay(900)
                         executeBotTurn(startingPlayerIndex)
                     }
                 }
@@ -431,7 +443,7 @@ class GameViewModel : ViewModel() {
             // Trigger Bot Turn if next player is a bot
             if (!finalPlayers[nextTurn].isHuman) {
                 viewModelScope.launch {
-                    delay(1400)
+                    delay(900)
                     executeBotTurn(nextTurn)
                 }
             }

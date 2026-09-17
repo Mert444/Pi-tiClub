@@ -284,7 +284,9 @@ fun GameScreen(navController: NavController, viewModel: GameViewModel) {
         name = "Euklid",
         points = euklidPlayer.totalScore + euklidPlayer.roundScore,
         scoreEvent = state.lastScoreEvent,
-        playerId = 2
+        playerId = 2,
+        isCurrentTurn = state.currentTurnIndex == 2,
+        isStarter = state.starterPlayerIndex == 2
       )
     }
 
@@ -299,7 +301,9 @@ fun GameScreen(navController: NavController, viewModel: GameViewModel) {
         name = "Plato",
         points = platoPlayer.totalScore + platoPlayer.roundScore,
         scoreEvent = state.lastScoreEvent,
-        playerId = 1
+        playerId = 1,
+        isCurrentTurn = state.currentTurnIndex == 1,
+        isStarter = state.starterPlayerIndex == 1
       )
       Spacer(modifier = Modifier.height(8.dp))
       LeftBotHand(cardCount = platoPlayer.hand.size)
@@ -316,7 +320,9 @@ fun GameScreen(navController: NavController, viewModel: GameViewModel) {
         name = "Sokrates",
         points = sokratesPlayer.totalScore + sokratesPlayer.roundScore,
         scoreEvent = state.lastScoreEvent,
-        playerId = 3
+        playerId = 3,
+        isCurrentTurn = state.currentTurnIndex == 3,
+        isStarter = state.starterPlayerIndex == 3
       )
       Spacer(modifier = Modifier.height(8.dp))
       RightBotHand(cardCount = sokratesPlayer.hand.size)
@@ -459,7 +465,9 @@ fun GameScreen(navController: NavController, viewModel: GameViewModel) {
           name = state.playerName,
           points = humanPlayer.totalScore + humanPlayer.roundScore,
           scoreEvent = state.lastScoreEvent,
-          playerId = 0
+          playerId = 0,
+          isCurrentTurn = state.currentTurnIndex == 0,
+          isStarter = state.starterPlayerIndex == 0
         )
       }
 
@@ -499,10 +507,18 @@ fun PlayerBadgeWithAnim(
   points: Int,
   iconText: String? = null,
   scoreEvent: ScoreGainEvent? = null,
-  playerId: Int
+  playerId: Int,
+  isCurrentTurn: Boolean = false,
+  isStarter: Boolean = false
 ) {
   Box(contentAlignment = Alignment.Center) {
-    PlayerBadge(name = name, points = points, iconText = iconText)
+    PlayerBadge(
+      name = name,
+      points = points,
+      iconText = iconText,
+      isCurrentTurn = isCurrentTurn,
+      isStarter = isStarter
+    )
     
     if (scoreEvent != null && scoreEvent.playerId == playerId) {
       FloatingScorePill(
@@ -558,15 +574,31 @@ fun FloatingScorePill(text: String, timestamp: Long, modifier: Modifier = Modifi
 }
 
 @Composable
-fun PlayerBadge(name: String, points: Int, iconText: String? = null) {
+fun PlayerBadge(
+  name: String,
+  points: Int,
+  iconText: String? = null,
+  isCurrentTurn: Boolean = false,
+  isStarter: Boolean = false
+) {
   Column(horizontalAlignment = Alignment.CenterHorizontally) {
     Box(
       modifier = Modifier
-        .background(Color.Black, RoundedCornerShape(2.dp))
-        .border(1.dp, Color.Black, RoundedCornerShape(2.dp))
+        .background(if (isCurrentTurn) Color(0xFF1B5E20) else Color.Black, RoundedCornerShape(4.dp))
+        .border(
+          width = if (isCurrentTurn) 2.dp else 1.dp,
+          color = if (isCurrentTurn) PrimaryYellow else Color.DarkGray,
+          shape = RoundedCornerShape(4.dp)
+        )
         .padding(horizontal = 10.dp, vertical = 4.dp)
     ) {
       Row(verticalAlignment = Alignment.CenterVertically) {
+        if (isStarter) {
+          Text(
+            text = "⭐ ",
+            fontSize = 11.sp
+          )
+        }
         Text(
           text = name,
           color = Color.White,
@@ -582,13 +614,18 @@ fun PlayerBadge(name: String, points: Int, iconText: String? = null) {
         )
       }
     }
-    if (iconText != null) {
+    if (isCurrentTurn || iconText != null) {
       Box(
         modifier = Modifier
-          .background(Color.Black, RoundedCornerShape(2.dp))
-          .padding(horizontal = 8.dp, vertical = 2.dp)
+          .background(if (isCurrentTurn) PrimaryYellow else Color.Black, RoundedCornerShape(2.dp))
+          .padding(horizontal = 6.dp, vertical = 2.dp)
       ) {
-        Text(text = iconText, color = Color.White, fontSize = 11.sp)
+        Text(
+          text = if (isCurrentTurn) "AM ZUG" else (iconText ?: ""),
+          color = if (isCurrentTurn) Color.Black else Color.White,
+          fontSize = 10.sp,
+          fontWeight = FontWeight.ExtraBold
+        )
       }
     }
   }
