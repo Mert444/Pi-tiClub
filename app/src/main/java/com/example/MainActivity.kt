@@ -99,9 +99,14 @@ fun AppNavigation(modifier: Modifier = Modifier) {
     InitialNicknameDialog(
       viewModel = gameViewModel,
       onConfirm = { nickname ->
+        val targetRoute = state.pendingRoute
         gameViewModel.confirmInitialNickname(nickname)
-        gameViewModel.startNewGame()
-        navController.navigate("game")
+        if (targetRoute == "online_lobby") {
+          navController.navigate("online_lobby")
+        } else {
+          gameViewModel.startNewGame()
+          navController.navigate("game")
+        }
       },
       onDismiss = { gameViewModel.toggleInitialNicknameDialog(false) }
     )
@@ -136,7 +141,7 @@ fun MenuScreen(navController: NavController, gameViewModel: GameViewModel) {
         modifier = Modifier
           .clickable {
             if (!state.hasSetNickname) {
-              gameViewModel.toggleInitialNicknameDialog(true)
+              gameViewModel.toggleInitialNicknameDialog(true, "game")
             } else {
               gameViewModel.startNewGame()
               navController.navigate("game")
@@ -157,7 +162,7 @@ fun MenuScreen(navController: NavController, gameViewModel: GameViewModel) {
         modifier = Modifier
           .clickable {
             if (!state.hasSetNickname) {
-              gameViewModel.toggleInitialNicknameDialog(true)
+              gameViewModel.toggleInitialNicknameDialog(true, "online_lobby")
             } else {
               navController.navigate("online_lobby")
             }
@@ -274,9 +279,9 @@ fun GameScreen(navController: NavController, viewModel: GameViewModel) {
   val platoCardCount = if (landedCounts != null) landedCounts!![1] else platoPlayer.hand.size
   val sokratesCardCount = if (landedCounts != null) landedCounts!![3] else sokratesPlayer.hand.size
 
-  // 4K Luxury Table Radial Felt Gradient
+  // 4K Luxury Table Radial Felt Gradient (Royal Blue Felt)
   val feltGradient = Brush.radialGradient(
-    colors = listOf(Color(0xFF0C4A31), Color(0xFF052B1C), Color(0xFF02170E)),
+    colors = listOf(Color(0xFF0F3B6A), Color(0xFF0A2548), Color(0xFF051428)),
     radius = 1200f
   )
 

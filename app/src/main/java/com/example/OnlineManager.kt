@@ -51,7 +51,11 @@ data class OnlineGameStateDto(
     val statusMessage: String = "Warte auf Mitspieler...",
     val lastPistiMessage: String? = null,
     val isGameStarted: Boolean = false,
-    val isGuestConnected: Boolean = false
+    val isGuestConnected: Boolean = false,
+    val showRoundEndSummary: Boolean = false,
+    val lastScorePoints: Int = 0,
+    val lastScorePlayerName: String? = null,
+    val dealAnimTrigger: Long = 0L
 )
 
 data class OnlineNetworkMessage(
@@ -446,7 +450,8 @@ class OnlineManager {
                 lastCaptorIndex = newLastCaptor,
                 isMatchOver = matchOver,
                 matchWinnerName = winner,
-                statusMessage = if (matchOver) "MATCH BEENDET! GEWINNER: $winner" else "RUNDE BEENDET!",
+                showRoundEndSummary = true,
+                statusMessage = if (matchOver) "MATCH BEENDET! GEWINNER: $winner" else "RUNDE ${currentState.roundNumber} BEENDET!",
                 lastPistiMessage = pistiNotice,
                 isGameStarted = true
             )
@@ -469,12 +474,52 @@ class OnlineManager {
                 lastCaptorIndex = nextLastCaptor,
                 statusMessage = statusMsg,
                 lastPistiMessage = pistiNotice,
+                lastScorePoints = if (captured) (newRoundScore - player.roundScore) else 0,
+                lastScorePlayerName = if (captured) player.name else null,
                 isGameStarted = true
             )
 
             _onlineState.value = updatedState
             broadcastState(updatedState)
         }
+    }
+
+    fun startNextRound() {
+        val currentState = _onlineState.value
+        val fullDeck = createShuffledDeck()
+        val center = fullDeck.take(4).mapIndexed { idx, card ->
+            card.copy(isFaceUp = idx == 3)
+        }
+        val remainingAfterCenter = fullDeck.drop(4)
+
+        val hostHand = remainingAfterCenter.take(4)
+        val guestHand = remainingAfterCenter.drop(4).take(4)
+        val remainingDeck = remainingAfterCenter.drop(8)
+
+        val nextStarter = (currentState.starterPlayerIndex + 1) % 2
+        val resetPlayers = currentState.players.map { p ->
+            val hand = if (p.id == 0) hostHand else guestHand
+            p.copy(hand = hand, capturedCount = 0, roundScore = 0)
+        }
+
+        val starterName = resetPlayers[nextStarter].name
+
+        val newState = currentState.copy(
+            centerPile = center,
+            deck = remainingDeck,
+            players = resetPlayers,
+            currentTurnIndex = nextStarter,
+            starterPlayerIndex = nextStarter,
+            lastCaptorIndex = -1,
+            roundNumber = currentState.roundNumber + 1,
+            showRoundEndSummary = false,
+            statusMessage = "RUNDE ${currentState.roundNumber + 1}! $starterName IST AM ZUG",
+            lastPistiMessage = null,
+            dealAnimTrigger = System.currentTimeMillis()
+        )
+
+        _onlineState.value = newState
+        broadcastState(newState)
     }
 
     private fun broadcastState(state: OnlineGameStateDto) {
@@ -487,6 +532,16 @@ class OnlineManager {
                 stateJson = stateJson
             )
         )
+    }
+
+    fun resetLobby() {
+        webSocket?.close(1000, "Reset")
+        webSocket = null
+        pollJob?.cancel()
+        pollJob = null
+        activeRoomCode = ""
+        isHost = false
+        _onlineState.value = OnlineGameStateDto()
     }
 
     fun leaveRoom() {

@@ -1,6 +1,9 @@
 package com.example
 
-import androidx.lifecycle.ViewModel
+import android.app.Application
+import android.content.Context
+import android.content.SharedPreferences
+import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -54,6 +57,7 @@ data class GameState(
     val playerName: String = "Spieler",
     val hasSetNickname: Boolean = false,
     val showInitialNicknameDialog: Boolean = false,
+    val pendingRoute: String = "game",
     val playerCoins: Int = 630,
     val soundEnabled: Boolean = true,
     val showRulesDialog: Boolean = false,
@@ -71,7 +75,9 @@ data class GameState(
     val dealAnimTrigger: Long = 0L
 )
 
-class GameViewModel : ViewModel() {
+class GameViewModel(application: Application) : AndroidViewModel(application) {
+    private val prefs: SharedPreferences = application.getSharedPreferences("pisti_prefs", Context.MODE_PRIVATE)
+
     private val _state = MutableStateFlow(GameState())
     val state: StateFlow<GameState> = _state
     private var timerJob: kotlinx.coroutines.Job? = null
@@ -80,6 +86,21 @@ class GameViewModel : ViewModel() {
     val onlineManager = OnlineManager()
 
     init {
+        val savedName = prefs.getString("saved_player_name", null)
+        val hasSet = prefs.getBoolean("has_set_nickname", false)
+        if (!savedName.isNullOrBlank() && hasSet) {
+            _state.update { currentState ->
+                val updatedPlayers = currentState.players.map {
+                    if (it.id == 0) it.copy(name = savedName) else it
+                }
+                currentState.copy(
+                    playerName = savedName,
+                    players = updatedPlayers,
+                    hasSetNickname = true,
+                    showInitialNicknameDialog = false
+                )
+            }
+        }
         startNewMatch()
     }
 
@@ -131,12 +152,13 @@ class GameViewModel : ViewModel() {
         _state.update { it.copy(soundEnabled = !it.soundEnabled) }
     }
 
-    fun toggleInitialNicknameDialog(show: Boolean) {
-        _state.update { it.copy(showInitialNicknameDialog = show) }
+    fun toggleInitialNicknameDialog(show: Boolean, route: String = "game") {
+        _state.update { it.copy(showInitialNicknameDialog = show, pendingRoute = route) }
     }
 
     fun confirmInitialNickname(newName: String) {
         val finalName = if (newName.isNotBlank()) newName.trim() else "Spieler"
+        prefs.edit().putString("saved_player_name", finalName).putBoolean("has_set_nickname", true).apply()
         _state.update { currentState ->
             val updatedPlayers = currentState.players.map {
                 if (it.id == 0) it.copy(name = finalName) else it
@@ -152,11 +174,13 @@ class GameViewModel : ViewModel() {
 
     fun updatePlayerName(newName: String) {
         if (newName.isNotBlank()) {
+            val finalName = newName.trim()
+            prefs.edit().putString("saved_player_name", finalName).putBoolean("has_set_nickname", true).apply()
             _state.update { currentState ->
                 val updatedPlayers = currentState.players.map {
-                    if (it.id == 0) it.copy(name = newName) else it
+                    if (it.id == 0) it.copy(name = finalName) else it
                 }
-                currentState.copy(playerName = newName, players = updatedPlayers, hasSetNickname = true)
+                currentState.copy(playerName = finalName, players = updatedPlayers, hasSetNickname = true)
             }
         }
     }
