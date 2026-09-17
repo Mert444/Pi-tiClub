@@ -52,7 +52,8 @@ data class OnlineGameStateDto(
     val deckSize: Int = 0,
     val players: List<OnlinePlayerDto> = emptyList(),
     val currentTurnIndex: Int = 0, // 0 = Host, 1 = Guest
-    val starterPlayerIndex: Int = 0,
+    val dealerPlayerIndex: Int = 0, // 0 = Host deals, 1 = Guest deals
+    val starterPlayerIndex: Int = 0, // 0 = Host starts, 1 = Guest starts (non-dealer plays first!)
     val lastCaptorIndex: Int = -1,
     val roundNumber: Int = 1,
     val targetScore: Int = 101,
@@ -147,6 +148,7 @@ object OnlineJsonHelper {
             put("ds", s.deckSize)
             put("ps", playersArr)
             put("ct", s.currentTurnIndex)
+            put("dp", s.dealerPlayerIndex)
             put("sp", s.starterPlayerIndex)
             put("lc", s.lastCaptorIndex)
             put("rn", s.roundNumber)
@@ -196,6 +198,7 @@ object OnlineJsonHelper {
                 deckSize = obj.optInt("ds", 0),
                 players = playersList,
                 currentTurnIndex = obj.optInt("ct", 0),
+                dealerPlayerIndex = obj.optInt("dp", 0),
                 starterPlayerIndex = obj.optInt("sp", 0),
                 lastCaptorIndex = obj.optInt("lc", -1),
                 roundNumber = obj.optInt("rn", 1),
@@ -626,21 +629,45 @@ class OnlineManager {
         }
     }
 
-    private fun startNewOnlineGame(guestName: String) {
-        val fullDeck = createShuffledDeck()
-
-        // 4 center cards (3 face-down, 1 face-up on top)
+    private fun createPreparedDeck(): Pair<List<OnlineCardDto>, List<OnlineCardDto>> {
+        val fullDeck = createShuffledDeck().toMutableList()
+        // By official Pişti rules, the top card of the initial 4 center cards (index 3) must NOT be a Jack
+        if (fullDeck[3].rank == "JACK") {
+            for (i in 4 until fullDeck.size) {
+                if (fullDeck[i].rank != "JACK") {
+                    val temp = fullDeck[3]
+                    fullDeck[3] = fullDeck[i]
+                    fullDeck[i] = temp
+                    break
+                }
+            }
+        }
         val center = fullDeck.take(4).mapIndexed { idx, card ->
             card.copy(isFaceUp = idx == 3)
         }
-        val remainingAfterCenter = fullDeck.drop(4)
+        val remaining = fullDeck.drop(4)
+        return Pair(center, remaining)
+    }
 
-        // Deal 4 to host (0) and 4 to guest (1)
-        val hostHand = remainingAfterCenter.take(4)
-        val guestHand = remainingAfterCenter.drop(4).take(4)
-        hostRemainingDeck = remainingAfterCenter.drop(8) // 40 cards kept on host!
+    private fun startNewOnlineGame(guestName: String) {
+        val (center, remainingAfterCenter) = createPreparedDeck()
+
+        // Pure 50/50 random choice for who is the dealer (Dağıtıcı / Geber)
+        val randomDealer = kotlin.random.Random.nextInt(2)
+        val starterIndex = (randomDealer + 1) % 2 // In Pişti, non-dealer plays first (Oyuna Başlayan / Vorhand)!
+
+        // Deal 4 cards to non-dealer first, 4 cards to dealer second
+        val nonDealerHand = remainingAfterCenter.take(4)
+        val dealerHand = remainingAfterCenter.drop(4).take(4)
+        hostRemainingDeck = remainingAfterCenter.drop(8) // 40 cards left in deck for subsequent 5 deals
+
+        val hostHand = if (randomDealer == 0) dealerHand else nonDealerHand
+        val guestHand = if (randomDealer == 1) dealerHand else nonDealerHand
 
         currentVersion = 1L
+
+        val starterName = if (starterIndex == 0) myName else guestName
+        val dealerName = if (randomDealer == 0) myName else guestName
 
         val hostPlayer = OnlinePlayerDto(0, myName, hostHand, 0, 0, 0, 0)
         val guestPlayer = OnlinePlayerDto(1, guestName, guestHand, 0, 0, 0, 0)
@@ -654,14 +681,15 @@ class OnlineManager {
             deck = emptyList(), // Keep network payload tiny (<1.5 KB)
             deckSize = hostRemainingDeck.size,
             players = listOf(hostPlayer, guestPlayer),
-            currentTurnIndex = 0,
-            starterPlayerIndex = 0,
+            currentTurnIndex = starterIndex,
+            dealerPlayerIndex = randomDealer,
+            starterPlayerIndex = starterIndex,
             lastCaptorIndex = -1,
             roundNumber = 1,
             targetScore = 101,
             isMatchOver = false,
             matchWinnerName = null,
-            statusMessage = "SPIEL GESTARTET! $myName IST AM ZUG",
+            statusMessage = "🎲 ZUFALL: $dealerName gibt • $starterName fängt an!",
             lastPistiMessage = null,
             isGameStarted = true,
             isGuestConnected = true,
@@ -752,16 +780,14 @@ class OnlineManager {
         var dealTriggered = false
 
         if (allHandsEmpty && hostRemainingDeck.isNotEmpty()) {
-            val p0Hand = hostRemainingDeck.take(4)
-            val p1Hand = hostRemainingDeck.drop(4).take(4)
+            val nonDealerIndex = (currentState.dealerPlayerIndex + 1) % 2
+            val nonDealerHand = hostRemainingDeck.take(4)
+            val dealerHand = hostRemainingDeck.drop(4).take(4)
             hostRemainingDeck = hostRemainingDeck.drop(8)
 
-            finalPlayers = updatedPlayers.map {
-                when (it.id) {
-                    0 -> it.copy(hand = p0Hand)
-                    1 -> it.copy(hand = p1Hand)
-                    else -> it
-                }
+            finalPlayers = updatedPlayers.map { p ->
+                val h = if (p.id == nonDealerIndex) nonDealerHand else dealerHand
+                p.copy(hand = h)
             }
             dealTriggered = true
         }
@@ -772,10 +798,13 @@ class OnlineManager {
 
         if (isRoundOver) {
             var roundFinalPlayers = finalPlayers
-            if (newLastCaptor in 0..1 && newCenterPile.isNotEmpty()) {
+            if (newCenterPile.isNotEmpty()) {
+                // In official Pişti, remaining center cards go to the last captor (son eli alan),
+                // or to the dealer if no captures occurred in the entire round.
+                val captorIndex = if (newLastCaptor in 0..1) newLastCaptor else currentState.dealerPlayerIndex
                 val tablePoints = newCenterPile.sumOf { getCardPoints(it) }
                 roundFinalPlayers = roundFinalPlayers.map {
-                    if (it.id == newLastCaptor) {
+                    if (it.id == captorIndex) {
                         it.copy(
                             capturedCount = it.capturedCount + newCenterPile.size,
                             roundScore = it.roundScore + tablePoints
@@ -896,23 +925,26 @@ class OnlineManager {
 
     fun startNextRound() {
         val currentState = _onlineState.value
-        val fullDeck = createShuffledDeck()
-        val center = fullDeck.take(4).mapIndexed { idx, card ->
-            card.copy(isFaceUp = idx == 3)
-        }
-        val remainingAfterCenter = fullDeck.drop(4)
+        val (center, remainingAfterCenter) = createPreparedDeck()
 
-        val hostHand = remainingAfterCenter.take(4)
-        val guestHand = remainingAfterCenter.drop(4).take(4)
+        // Dealer role rotates clockwise each round
+        val nextDealer = (currentState.dealerPlayerIndex + 1) % 2
+        val nextStarter = (nextDealer + 1) % 2 // Non-dealer plays first!
+
+        val nonDealerHand = remainingAfterCenter.take(4)
+        val dealerHand = remainingAfterCenter.drop(4).take(4)
         hostRemainingDeck = remainingAfterCenter.drop(8)
 
-        val nextStarter = (currentState.starterPlayerIndex + 1) % 2
+        val hostHand = if (nextDealer == 0) dealerHand else nonDealerHand
+        val guestHand = if (nextDealer == 1) dealerHand else nonDealerHand
+
         val resetPlayers = currentState.players.map { p ->
             val hand = if (p.id == 0) hostHand else guestHand
             p.copy(hand = hand, capturedCount = 0, roundScore = 0)
         }
 
         val starterName = resetPlayers[nextStarter].name
+        val dealerName = resetPlayers[nextDealer].name
 
         currentVersion++
 
@@ -923,12 +955,13 @@ class OnlineManager {
             deckSize = hostRemainingDeck.size,
             players = resetPlayers,
             currentTurnIndex = nextStarter,
+            dealerPlayerIndex = nextDealer,
             starterPlayerIndex = nextStarter,
             lastCaptorIndex = -1,
             roundNumber = currentState.roundNumber + 1,
             showRoundEndSummary = false,
             overshootMessage = null,
-            statusMessage = "RUNDE ${currentState.roundNumber + 1}! $starterName IST AM ZUG",
+            statusMessage = "RUNDE ${currentState.roundNumber + 1}! $dealerName gibt • $starterName fängt an",
             lastPistiMessage = null,
             dealAnimTrigger = System.currentTimeMillis()
         )
@@ -970,15 +1003,18 @@ class OnlineManager {
         }
 
         val currentState = _onlineState.value
-        val fullDeck = createShuffledDeck()
-        val center = fullDeck.take(4).mapIndexed { idx, card ->
-            card.copy(isFaceUp = idx == 3)
-        }
-        val remainingAfterCenter = fullDeck.drop(4)
+        val (center, remainingAfterCenter) = createPreparedDeck()
 
-        val hostHand = remainingAfterCenter.take(4)
-        val guestHand = remainingAfterCenter.drop(4).take(4)
+        // Pure 50/50 random choice for who deals the rematch
+        val randomDealer = kotlin.random.Random.nextInt(2)
+        val starterIndex = (randomDealer + 1) % 2 // Non-dealer plays first!
+
+        val nonDealerHand = remainingAfterCenter.take(4)
+        val dealerHand = remainingAfterCenter.drop(4).take(4)
         hostRemainingDeck = remainingAfterCenter.drop(8)
+
+        val hostHand = if (randomDealer == 0) dealerHand else nonDealerHand
+        val guestHand = if (randomDealer == 1) dealerHand else nonDealerHand
 
         val resetPlayers = currentState.players.map { p ->
             val hand = if (p.id == 0) hostHand else guestHand
@@ -991,6 +1027,9 @@ class OnlineManager {
             )
         }
 
+        val starterName = resetPlayers[starterIndex].name
+        val dealerName = resetPlayers[randomDealer].name
+
         currentVersion++
 
         val freshState = currentState.copy(
@@ -999,18 +1038,21 @@ class OnlineManager {
             deck = emptyList(),
             deckSize = hostRemainingDeck.size,
             players = resetPlayers,
-            currentTurnIndex = 0,
-            starterPlayerIndex = 0,
+            currentTurnIndex = starterIndex,
+            dealerPlayerIndex = randomDealer,
+            starterPlayerIndex = starterIndex,
             lastCaptorIndex = -1,
             roundNumber = 1,
             targetScore = 101,
             isMatchOver = false,
             matchWinnerName = null,
             overshootMessage = null,
-            statusMessage = "NEUES MATCH GESTARTET! ${resetPlayers.firstOrNull()?.name ?: "Host"} IST AM ZUG",
+            statusMessage = "🎲 REVANCHE! $dealerName gibt • $starterName fängt an!",
             lastPistiMessage = null,
             isGameStarted = true,
             showRoundEndSummary = false,
+            lastScorePoints = 0,
+            lastScorePlayerName = null,
             dealAnimTrigger = System.currentTimeMillis()
         )
 

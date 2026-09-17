@@ -46,7 +46,11 @@ class MainActivity : ComponentActivity() {
     enableEdgeToEdge()
     setContent {
       MyApplicationTheme {
-        Scaffold(modifier = Modifier.fillMaxSize(), containerColor = MenuTeal) { innerPadding ->
+        Scaffold(
+          modifier = Modifier.fillMaxSize(),
+          containerColor = MenuTeal,
+          contentWindowInsets = WindowInsets.safeDrawing
+        ) { innerPadding ->
           AppNavigation(modifier = Modifier.padding(innerPadding))
         }
       }
@@ -1265,7 +1269,9 @@ fun FannedPlayerHand(
   modifier: Modifier = Modifier
 ) {
   Box(
-    modifier = modifier.fillMaxWidth(),
+    modifier = modifier
+      .fillMaxWidth()
+      .height(136.dp),
     contentAlignment = Alignment.BottomCenter
   ) {
     val total = hand.size
@@ -1492,17 +1498,58 @@ fun StatRow(label: String, value: String) {
 fun RulesDialog(onDismiss: () -> Unit) {
   AlertDialog(
     onDismissRequest = { onDismiss() },
-    title = { Text("Pişti Regeln & Hilfe", color = PrimaryYellow, fontWeight = FontWeight.Bold) },
+    title = {
+      Row(verticalAlignment = Alignment.CenterVertically) {
+        Text("📖 Pişti Spielregeln (Einfach erklärt)", color = PrimaryYellow, fontWeight = FontWeight.Bold, fontSize = 18.sp)
+      }
+    },
     text = {
-      Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
-        Text(
-          "• Ziel des Spiels:\nWer als Erster 101 Punkte erreicht, gewinnt das Spiel.\n\n" +
-          "• Karten stechen:\nSpielst du eine Karte mit demselben Wert wie die oberste Karte auf dem Tisch oder einen Buben (J), gehört der Stapel dir.\n\n" +
-          "• Pişti (10 Pkt):\nStichst du eine einzelne Karte auf dem Tisch mit demselben Wert, ist das ein Pişti (+10 Punkte).\n\n" +
-          "• Bube Pişti (20 Pkt):\nStichst du einen einzelnen Buben auf dem Tisch mit einem Buben, erhältst du 20 Punkte.\n\n" +
-          "• Spezial-Punkte:\n- Karo 10 (♦10): +3 Pkt\n- Kreuz 2 (♣2): +2 Pkt\n- Bube (J) / Ass (A): +1 Pkt\n- Mehrheit der Karten: +3 Pkt",
-          color = Color.White,
-          fontSize = 12.sp
+      Column(
+        modifier = Modifier
+          .verticalScroll(rememberScrollState())
+          .padding(vertical = 4.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp)
+      ) {
+        RuleCardItem(
+          icon = "🎯",
+          title = "Ziel des Spiels",
+          desc = "Wer als Erster genau 101 Punkte erreicht, gewinnt das Match! Triffst du mehr als 101 Punkte (Überwerfen), fällst du als Strafe auf 50 Punkte zurück."
+        )
+
+        RuleCardItem(
+          icon = "🎲",
+          title = "Wer fängt an? (Originale Reihenfolge)",
+          desc = "Zu Beginn entscheidet reiner Zufall, wer Geber (Dağıtan) ist. Der andere Spieler (Vorhand) spielt die 1. Karte aus! In jeder neuen Runde wechselt die Geberrolle abwechselnd."
+        )
+
+        RuleCardItem(
+          icon = "🎴",
+          title = "Karten austeilen",
+          desc = "4 Karten kommen in die Mitte (3 verdeckt, 1 offen – niemals ein Bube). Jeder Spieler erhält 4 Handkarten. Sind alle 4 Karten gespielt, werden wieder 4 neue ausgeteilt, bis alle 52 Karten durchgespielt sind."
+        )
+
+        RuleCardItem(
+          icon = "⚡",
+          title = "Karten stechen",
+          desc = "Triffst du die oberste Karte auf dem Tisch mit demselben Kartenwert (z.B. 8 auf 8) oder legst du einen Buben (Joker), gehört der gesamte Kartenstapel dir!"
+        )
+
+        RuleCardItem(
+          icon = "🔥",
+          title = "Pişti (+10 Punkte) & Buben-Pişti (+20)",
+          desc = "• Normales Pişti (+10 Pkt): Liegt nur 1 einzelne Karte auf dem Tisch und du legst denselben Wert drauf.\n• Buben-Pişti (+20 Pkt): Liegt ein einzelner Bube und du legst einen Buben drauf!\n(Hinweis: Ein Bube auf eine normale Einzelkarte sticht normal, ist aber kein Pişti)."
+        )
+
+        RuleCardItem(
+          icon = "💎",
+          title = "Punktwerte der Karten",
+          desc = "• Karo 10 (♦10): 3 Punkte\n• Kreuz 2 (♣2): 2 Punkte\n• Alle Asse (A) & Buben (J): je 1 Punkt\n• Kartenmehrheit (+3 Pkt): Wer am Rundenende mindestens 27 Karten gesammelt hat, bekommt +3 Bonuspunkte!"
+        )
+
+        RuleCardItem(
+          icon = "🏁",
+          title = "Letzter Stich (Son Alan)",
+          desc = "Bleiben am Ende der 52 Karten noch Karten auf dem Tisch liegen, bekommt diese der Spieler, der den letzten Stich der Runde gemacht hat."
         )
       }
     },
@@ -1511,11 +1558,32 @@ fun RulesDialog(onDismiss: () -> Unit) {
         onClick = { onDismiss() },
         colors = ButtonDefaults.buttonColors(containerColor = PrimaryYellow, contentColor = OnPrimaryYellow)
       ) {
-        Text("Verstanden")
+        Text("Alles klar!", fontWeight = FontWeight.Bold)
       }
     },
     containerColor = BackgroundGreen
   )
+}
+
+@Composable
+fun RuleCardItem(icon: String, title: String, desc: String) {
+  Box(
+    modifier = Modifier
+      .fillMaxWidth()
+      .background(Color.White.copy(alpha = 0.08f), RoundedCornerShape(10.dp))
+      .border(1.dp, Color.White.copy(alpha = 0.2f), RoundedCornerShape(10.dp))
+      .padding(10.dp)
+  ) {
+    Column {
+      Row(verticalAlignment = Alignment.CenterVertically) {
+        Text(icon, fontSize = 16.sp)
+        Spacer(modifier = Modifier.width(6.dp))
+        Text(title, color = PrimaryYellow, fontWeight = FontWeight.ExtraBold, fontSize = 13.sp)
+      }
+      Spacer(modifier = Modifier.height(4.dp))
+      Text(desc, color = Color.White.copy(alpha = 0.9f), fontSize = 11.5.sp, lineHeight = 16.sp)
+    }
+  }
 }
 
 @Composable

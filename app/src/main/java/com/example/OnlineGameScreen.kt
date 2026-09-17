@@ -616,6 +616,7 @@ fun OnlineGameScreen(navController: NavController, gameViewModel: GameViewModel)
     val onlineState by onlineManager.onlineState.collectAsState()
     val myPlayerId by onlineManager.myPlayerId.collectAsState()
     var showExitDialog by remember { mutableStateOf(false) }
+    var showRulesDialog by remember { mutableStateOf(false) }
 
     val opponentId = if (myPlayerId == 0) 1 else 0
     val myPlayer = onlineState.players.find { it.id == myPlayerId } ?: OnlinePlayerDto(myPlayerId, "Du")
@@ -684,8 +685,23 @@ fun OnlineGameScreen(navController: NavController, gameViewModel: GameViewModel)
                     }
                 }
 
-                // Action Buttons (Resync + Exit)
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                // Action Buttons (Rules + Resync + Exit)
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    IconButton(
+                        onClick = { showRulesDialog = true },
+                        modifier = Modifier
+                            .size(36.dp)
+                            .background(Color(0xFF072B1E), CircleShape)
+                            .border(1.dp, Color(0xFFD4AF37).copy(alpha = 0.8f), CircleShape)
+                    ) {
+                        Icon(
+                            Icons.Default.Info,
+                            contentDescription = "Hilfe & Regeln",
+                            tint = PrimaryYellow,
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
+
                     IconButton(
                         onClick = { onlineManager.resyncState() },
                         modifier = Modifier
@@ -696,7 +712,7 @@ fun OnlineGameScreen(navController: NavController, gameViewModel: GameViewModel)
                         Icon(
                             Icons.Default.Refresh,
                             contentDescription = "Synchronisieren",
-                            tint = PrimaryYellow,
+                            tint = Color.White,
                             modifier = Modifier.size(18.dp)
                         )
                     }
@@ -728,7 +744,9 @@ fun OnlineGameScreen(navController: NavController, gameViewModel: GameViewModel)
                 myPlayerId = myPlayerId,
                 roundNumber = onlineState.roundNumber,
                 targetScore = onlineState.targetScore,
-                deckSize = onlineState.deckSize
+                deckSize = onlineState.deckSize,
+                dealerPlayerIndex = onlineState.dealerPlayerIndex,
+                starterPlayerIndex = onlineState.starterPlayerIndex
             )
 
             Spacer(modifier = Modifier.height(10.dp))
@@ -865,17 +883,31 @@ fun OnlineGameScreen(navController: NavController, gameViewModel: GameViewModel)
                 if (onlineState.centerPile.isEmpty()) {
                     Box(
                         modifier = Modifier
-                            .width(68.dp)
-                            .height(100.dp)
-                            .border(1.5.dp, Color.White.copy(alpha = 0.25f), RoundedCornerShape(8.dp)),
+                            .width(76.dp)
+                            .height(106.dp)
+                            .background(Color.White.copy(alpha = 0.06f), RoundedCornerShape(8.dp))
+                            .border(1.5.dp, if (isMyTurn) PrimaryYellow else Color.White.copy(alpha = 0.25f), RoundedCornerShape(8.dp))
+                            .padding(4.dp),
                         contentAlignment = Alignment.Center
                     ) {
-                        Text(
-                            text = "Tisch leer",
-                            color = Color.White.copy(alpha = 0.45f),
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.Medium
-                        )
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.Center
+                        ) {
+                            Text(
+                                text = if (isMyTurn) "👉" else "🎴",
+                                fontSize = 20.sp
+                            )
+                            Spacer(modifier = Modifier.height(2.dp))
+                            Text(
+                                text = if (isMyTurn) "Du bist dran!\nLege eine Karte" else "Tisch leer\n${opponentPlayer.name} legt...",
+                                color = if (isMyTurn) PrimaryYellow else Color.White.copy(alpha = 0.6f),
+                                fontSize = 9.5.sp,
+                                fontWeight = FontWeight.Bold,
+                                textAlign = TextAlign.Center,
+                                lineHeight = 12.sp
+                            )
+                        }
                     }
                 } else {
                     val topCardDto = onlineState.centerPile.last()
@@ -1170,6 +1202,11 @@ fun OnlineGameScreen(navController: NavController, gameViewModel: GameViewModel)
             containerColor = BackgroundGreen
         )
     }
+
+    // RULES & HELP DIALOG
+    if (showRulesDialog) {
+        RulesDialog(onDismiss = { showRulesDialog = false })
+    }
 }
 
 // --- DEDICATED LIVE 2-PLAYER SCOREBOARD COMPOSABLE (PUNKTE-ZÄHLER) ---
@@ -1183,10 +1220,17 @@ fun OnlineLiveScoreboard(
     roundNumber: Int,
     targetScore: Int = 101,
     deckSize: Int = 0,
+    dealerPlayerIndex: Int = 0,
+    starterPlayerIndex: Int = 0,
     modifier: Modifier = Modifier
 ) {
     val isMyTurn = currentTurnIndex == myPlayerId
     val isOpponentTurn = currentTurnIndex == opponentPlayer.id
+
+    val isMyDealer = dealerPlayerIndex == myPlayerId
+    val isMyStarter = starterPlayerIndex == myPlayerId
+    val isOpponentDealer = dealerPlayerIndex == opponentPlayer.id
+    val isOpponentStarter = starterPlayerIndex == opponentPlayer.id
 
     Surface(
         modifier = modifier
@@ -1245,6 +1289,8 @@ fun OnlineLiveScoreboard(
                     capturedCount = myPlayer.capturedCount,
                     pistiCount = myPlayer.pistiCount,
                     isTurn = isMyTurn,
+                    isDealer = isMyDealer,
+                    isStarter = isMyStarter,
                     modifier = Modifier.weight(1f)
                 )
 
@@ -1256,6 +1302,8 @@ fun OnlineLiveScoreboard(
                     capturedCount = opponentPlayer.capturedCount,
                     pistiCount = opponentPlayer.pistiCount,
                     isTurn = isOpponentTurn,
+                    isDealer = isOpponentDealer,
+                    isStarter = isOpponentStarter,
                     modifier = Modifier.weight(1f)
                 )
             }
@@ -1271,10 +1319,14 @@ private fun PlayerScoreCard(
     capturedCount: Int,
     pistiCount: Int,
     isTurn: Boolean,
+    isDealer: Boolean = false,
+    isStarter: Boolean = false,
     modifier: Modifier = Modifier
 ) {
-    val progress = (totalScore.coerceIn(0, 101) / 101f)
-    val needed = 101 - totalScore
+    // Current LIVE Match Score (Round Score + Previous Match Total)
+    val liveScore = totalScore + roundScore
+    val progress = (liveScore.coerceIn(0, 101) / 101f)
+    val needed = (101 - liveScore).coerceAtLeast(0)
 
     Box(
         modifier = modifier
@@ -1290,7 +1342,7 @@ private fun PlayerScoreCard(
             .padding(vertical = 5.dp, horizontal = 6.dp)
     ) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            // Player Name + Turn Badge
+            // Player Name + Turn Badge + Dealer/Starter Badge
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.Center,
@@ -1304,17 +1356,31 @@ private fun PlayerScoreCard(
                     maxLines = 1
                 )
                 if (isTurn) {
-                    Spacer(modifier = Modifier.width(4.dp))
+                    Spacer(modifier = Modifier.width(3.dp))
                     Box(
                         modifier = Modifier
                             .background(PrimaryYellow, RoundedCornerShape(3.dp))
-                            .padding(horizontal = 4.dp, vertical = 1.dp)
+                            .padding(horizontal = 3.dp, vertical = 1.dp)
                     ) {
                         Text(
                             text = "AM ZUG",
                             color = Color.Black,
-                            fontSize = 8.sp,
+                            fontSize = 7.5.sp,
                             fontWeight = FontWeight.ExtraBold
+                        )
+                    }
+                } else if (isDealer) {
+                    Spacer(modifier = Modifier.width(3.dp))
+                    Box(
+                        modifier = Modifier
+                            .background(Color.White.copy(alpha = 0.18f), RoundedCornerShape(3.dp))
+                            .padding(horizontal = 3.dp, vertical = 1.dp)
+                    ) {
+                        Text(
+                            text = "🎴 GEBER",
+                            color = Color.White,
+                            fontSize = 7.5.sp,
+                            fontWeight = FontWeight.Bold
                         )
                     }
                 }
@@ -1322,12 +1388,12 @@ private fun PlayerScoreCard(
 
             Spacer(modifier = Modifier.height(2.dp))
 
-            // Score Counter (X / 101)
+            // Score Counter (LIVE X / 101)
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
-                    text = "$totalScore",
-                    color = Color.White,
-                    fontSize = 14.sp,
+                    text = "$liveScore",
+                    color = if (liveScore > 0) PrimaryYellow else Color.White,
+                    fontSize = 15.sp,
                     fontWeight = FontWeight.ExtraBold
                 )
                 Text(
@@ -1340,7 +1406,7 @@ private fun PlayerScoreCard(
                     Spacer(modifier = Modifier.width(4.dp))
                     Text(
                         text = "(+$roundScore)",
-                        color = PrimaryYellow,
+                        color = Color(0xFF00E676),
                         fontSize = 10.sp,
                         fontWeight = FontWeight.Bold
                     )
