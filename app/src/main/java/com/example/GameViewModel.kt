@@ -383,9 +383,6 @@ class GameViewModel : ViewModel() {
 
         val finalCenterPile = if (captured) emptyList() else newCenterPile
 
-        // Turn moves clockwise
-        val nextTurn = (currentState.currentTurnIndex + 1) % 4
-
         // Check if all hands are empty
         val allHandsEmpty = updatedPlayers.all { it.hand.isEmpty() }
         var finalDeck = currentState.deck
@@ -397,6 +394,26 @@ class GameViewModel : ViewModel() {
             finalPlayers = newPlayers
             finalDeck = leftoverDeck
             dealTriggered = true
+        }
+
+        // Turn calculation:
+        // If new sub-hands were dealt, the last captor gets to start ONCE.
+        // Otherwise, if no captor or for subsequent deals, turn rotates clockwise.
+        var nextTurn = (currentState.currentTurnIndex + 1) % 4
+        var nextStarterIndex = currentState.starterPlayerIndex
+        var nextLastCaptor = newLastCaptor
+
+        if (dealTriggered) {
+            if (newLastCaptor in 0..3) {
+                // Last captor gets 1-time starting privilege
+                nextTurn = newLastCaptor
+                nextStarterIndex = newLastCaptor
+                nextLastCaptor = -1 // Reset after granting 1-time starter privilege
+            } else {
+                // Otherwise rotate starter clockwise
+                nextStarterIndex = (currentState.starterPlayerIndex + 1) % 4
+                nextTurn = nextStarterIndex
+            }
         }
 
         val isRoundOver = finalPlayers.all { it.hand.isEmpty() } && finalDeck.isEmpty()
@@ -496,7 +513,11 @@ class GameViewModel : ViewModel() {
             }
         } else {
             val nextPlayerName = finalPlayers[nextTurn].name
-            val statusMsg = if (nextTurn == 0) "DU BIST AM ZUG" else "$nextPlayerName überlegt..."
+            val statusMsg = if (dealTriggered) {
+                if (nextTurn == 0) "NEUE HANDKARTEN AUSGETEILT! DU BIST AM ZUG." else "NEUE HANDKARTEN AUSGETEILT! $nextPlayerName überlegt..."
+            } else {
+                if (nextTurn == 0) "DU BIST AM ZUG" else "$nextPlayerName überlegt..."
+            }
 
             _state.update {
                 it.copy(
@@ -504,7 +525,8 @@ class GameViewModel : ViewModel() {
                     centerPile = finalCenterPile,
                     players = finalPlayers,
                     currentTurnIndex = nextTurn,
-                    lastCaptorIndex = newLastCaptor,
+                    starterPlayerIndex = nextStarterIndex,
+                    lastCaptorIndex = nextLastCaptor,
                     statusMessage = statusMsg,
                     lastPistiMessage = pistiNotice,
                     lastScoreEvent = scoreAnimEvent ?: it.lastScoreEvent,
@@ -546,32 +568,48 @@ class GameViewModel : ViewModel() {
                 ?: botHand.filter { it.rank != Rank.JACK }.shuffled().firstOrNull()
                 ?: botHand.first()
         } else if (centerPile.size == 1 && topCard != null) {
-            // 1 Card on table (Pişti opportunity):
+            // 1 Card on table (Pişti opportunity for human player):
             val matchingCard = botHand.find { it.rank == topCard.rank }
             val jackCard = botHand.find { it.rank == Rank.JACK }
 
-            // Balanced AI: 75% chance bot takes Pişti if available, 25% chance holds back to keep game dynamic
-            val takePisti = kotlin.random.Random.nextFloat() < 0.75f
+            // Natural AI behavior: bots don't ruthlessly snatch every Pişti opportunity
+            // Plato (1): 20%, Euklid (2): 25%, Sokrates (3): 15%
+            val pistiProbability = when (botIndex) {
+                1 -> 0.20f
+                2 -> 0.25f
+                else -> 0.15f
+            }
 
-            if (matchingCard != null && takePisti) {
+            val takePisti = matchingCard != null && (kotlin.random.Random.nextFloat() < pistiProbability)
+            val useJackOnHighCard = jackCard != null && (topCard.rank == Rank.ACE || (topCard.suit == Suit.DIAMONDS && topCard.rank == Rank.TEN)) && (kotlin.random.Random.nextFloat() < 0.20f)
+
+            if (takePisti) {
                 cardToPlay = matchingCard
-            } else if (jackCard != null && takePisti && (topCard.rank == Rank.ACE || (topCard.suit == Suit.DIAMONDS && topCard.rank == Rank.TEN))) {
+            } else if (useJackOnHighCard) {
                 cardToPlay = jackCard
             } else {
+                // Play a safe non-matching, non-Jack card to leave table pile open for human player
                 val safeCards = botHand.filter { it.rank != Rank.JACK && it.rank != topCard.rank }
                 cardToPlay = safeCards.shuffled().firstOrNull()
                     ?: botHand.filter { it.rank != Rank.JACK }.shuffled().firstOrNull()
                     ?: botHand.first()
             }
         } else {
-            // 2+ Cards on table:
+            // 2+ Cards on table (Capture opportunity):
             val topCardRank = topCard?.rank
             val matchingCard = botHand.find { it.rank == topCardRank }
             val jackCard = botHand.find { it.rank == Rank.JACK }
 
+            val hasHighPoints = centerPile.any {
+                it.rank == Rank.ACE ||
+                (it.suit == Suit.DIAMONDS && it.rank == Rank.TEN) ||
+                (it.suit == Suit.CLUBS && it.rank == Rank.TWO)
+            }
+
             if (matchingCard != null) {
                 cardToPlay = matchingCard
-            } else if (jackCard != null) {
+            } else if (jackCard != null && (centerPile.size >= 3 || hasHighPoints)) {
+                // Bots save Jacks for valuable or large table piles (3+ cards)
                 cardToPlay = jackCard
             } else {
                 val safeCards = botHand.filter { it.rank != Rank.JACK }
