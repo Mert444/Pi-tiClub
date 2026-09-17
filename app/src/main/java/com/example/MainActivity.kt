@@ -103,7 +103,7 @@ fun AppNavigation(modifier: Modifier = Modifier) {
         gameViewModel.confirmInitialNickname(nickname)
         if (targetRoute == "online_lobby") {
           navController.navigate("online_lobby")
-        } else {
+        } else if (targetRoute == "game") {
           gameViewModel.startNewGame()
           navController.navigate("game")
         }
@@ -1643,20 +1643,20 @@ fun InitialNicknameDialog(viewModel: GameViewModel, onConfirm: (String) -> Unit,
       Row(verticalAlignment = Alignment.CenterVertically) {
         Icon(Icons.Default.Person, contentDescription = null, tint = PrimaryYellow)
         Spacer(modifier = Modifier.width(8.dp))
-        Text("Willkommen!", color = PrimaryYellow, fontWeight = FontWeight.Bold, fontSize = 20.sp)
+        Text("Willkommen bei Pişti 101!", color = PrimaryYellow, fontWeight = FontWeight.Bold, fontSize = 20.sp)
       }
     },
     text = {
       Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Text(
-          "Gib deinen Nickname ein, um das Spiel zu starten. Du kannst ihn später jederzeit in den Einstellungen ändern.",
+          "Bitte gib deinen Spielernamen ein. Dieser Name wird dir und deinen Freunden in Online-Duellen sowie im Spiel angezeigt.",
           color = Color.White,
           fontSize = 13.sp
         )
         OutlinedTextField(
           value = tempName,
           onValueChange = { tempName = it },
-          label = { Text("Dein Nickname", color = OutlineYellow) },
+          label = { Text("Dein Username", color = OutlineYellow) },
           singleLine = true,
           colors = OutlinedTextFieldDefaults.colors(
             focusedBorderColor = PrimaryYellow,
@@ -1673,7 +1673,7 @@ fun InitialNicknameDialog(viewModel: GameViewModel, onConfirm: (String) -> Unit,
         onClick = { onConfirm(tempName) },
         colors = ButtonDefaults.buttonColors(containerColor = PrimaryYellow, contentColor = OnPrimaryYellow)
       ) {
-        Text("Speichern & Spiel starten", fontWeight = FontWeight.Bold)
+        Text("Speichern & Weiter", fontWeight = FontWeight.Bold)
       }
     },
     containerColor = BackgroundGreen

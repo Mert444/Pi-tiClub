@@ -100,6 +100,14 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
                     showInitialNicknameDialog = false
                 )
             }
+        } else {
+            _state.update { currentState ->
+                currentState.copy(
+                    hasSetNickname = false,
+                    showInitialNicknameDialog = true,
+                    pendingRoute = "menu"
+                )
+            }
         }
         startNewMatch()
     }

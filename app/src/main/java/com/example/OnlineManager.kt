@@ -85,6 +85,7 @@ class OnlineManager {
     private val client = OkHttpClient.Builder()
         .readTimeout(0, TimeUnit.MILLISECONDS)
         .connectTimeout(10, TimeUnit.SECONDS)
+        .pingInterval(15, TimeUnit.SECONDS)
         .build()
 
     private val moshi = Moshi.Builder().addLast(KotlinJsonAdapterFactory()).build()
@@ -93,7 +94,7 @@ class OnlineManager {
 
     private val scope = CoroutineScope(Dispatchers.IO + Job())
 
-    private var streamJob: Job? = null
+    private var webSocket: WebSocket? = null
     private var pollJob: Job? = null
 
     private val _onlineState = MutableStateFlow(OnlineGameStateDto())
@@ -146,7 +147,7 @@ class OnlineManager {
         _onlineState.value = initialState
         _connectionStatus.value = "Raum $code aktiv – Warte auf Mitspieler"
 
-        startRawStream(code)
+        startWebSocket(code)
         startSafetyPoller(code)
         return code
     }
@@ -176,13 +177,12 @@ class OnlineManager {
             isGameStarted = false
         )
 
-        startRawStream(cleanCode)
+        startWebSocket(cleanCode)
         startSafetyPoller(cleanCode)
 
         // Send first JOIN_ROOM immediately
         sendNetworkMessage(
             OnlineNetworkMessage(
-                id = java.util.UUID.randomUUID().toString(),
                 type = "JOIN_ROOM",
                 senderId = 1,
                 roomCode = cleanCode,
@@ -194,13 +194,12 @@ class OnlineManager {
         joinJob = scope.launch(Dispatchers.IO) {
             var attempt = 1
             while (isActive && !_onlineState.value.isGameStarted) {
-                delay(1000L)
+                delay(2000L)
                 if (_onlineState.value.isGameStarted) break
                 attempt++
                 _connectionStatus.value = "Suche Freund in Raum $cleanCode... ($attempt)"
                 sendNetworkMessage(
                     OnlineNetworkMessage(
-                        id = java.util.UUID.randomUUID().toString(),
                         type = "JOIN_ROOM",
                         senderId = 1,
                         roomCode = cleanCode,
@@ -221,36 +220,43 @@ class OnlineManager {
 
     private fun topicForRoom(roomCode: String): String = "pisti101_v2_room_$roomCode"
 
-    private fun startRawStream(roomCode: String) {
-        streamJob?.cancel()
-        streamJob = scope.launch(Dispatchers.IO) {
-            val topic = topicForRoom(roomCode)
-            while (isActive) {
-                try {
-                    val req = Request.Builder()
-                        .url("https://ntfy.sh/$topic/json")
-                        .build()
-                    client.newCall(req).execute().use { response ->
-                        if (response.isSuccessful) {
-                            if (_connectionStatus.value.contains("Fehler", ignoreCase = true) || _connectionStatus.value.contains("getrennt", ignoreCase = true)) {
-                                _connectionStatus.value = if (isHost) "Raum $roomCode aktiv – Warte auf Mitspieler" else "Verbinde mit Raum $roomCode..."
-                            }
-                            val source = response.body?.source() ?: return@use
-                            while (!source.exhausted() && isActive) {
-                                val line = source.readUtf8Line() ?: break
-                                val trimmed = line.trim()
-                                if (trimmed.isNotEmpty()) {
-                                    handleIncomingMessageText(trimmed)
-                                }
-                            }
-                        }
-                    }
-                } catch (e: Exception) {
-                    Log.e("OnlineManager", "Stream error: ${e.message}")
-                }
-                delay(500L)
-            }
+    private fun startWebSocket(roomCode: String) {
+        try {
+            webSocket?.close(1000, "Reconnecting")
+        } catch (e: Exception) {
+            Log.e("OnlineManager", "WS close error: ${e.message}")
         }
+        webSocket = null
+
+        val topic = topicForRoom(roomCode)
+        val wsReq = Request.Builder()
+            .url("wss://ntfy.sh/$topic/ws")
+            .build()
+
+        webSocket = client.newWebSocket(wsReq, object : WebSocketListener() {
+            override fun onOpen(ws: WebSocket, response: Response) {
+                Log.d("OnlineManager", "WebSocket connected to $topic")
+                _connectionStatus.value = if (isHost) "Raum $roomCode aktiv – Warte auf Mitspieler" else "Verbinde mit Raum $roomCode..."
+            }
+
+            override fun onMessage(ws: WebSocket, text: String) {
+                handleIncomingMessageText(text)
+            }
+
+            override fun onClosed(ws: WebSocket, code: Int, reason: String) {
+                Log.d("OnlineManager", "WebSocket closed: $reason")
+            }
+
+            override fun onFailure(ws: WebSocket, t: Throwable, response: Response?) {
+                Log.e("OnlineManager", "WebSocket error: ${t.message}")
+                scope.launch {
+                    delay(2500L)
+                    if (activeRoomCode == roomCode && isActive) {
+                        startWebSocket(roomCode)
+                    }
+                }
+            }
+        })
     }
 
     private fun startSafetyPoller(roomCode: String) {
@@ -259,9 +265,9 @@ class OnlineManager {
             val topic = topicForRoom(roomCode)
             while (isActive) {
                 try {
-                    // Poll recent messages with since=20s to prevent missing packets without overloading or replaying old history
+                    // Poll recent messages with since=10s as a fallback every 3.5s
                     val req = Request.Builder()
-                        .url("https://ntfy.sh/$topic/json?poll=1&since=20s")
+                        .url("https://ntfy.sh/$topic/json?poll=1&since=10s")
                         .build()
                     client.newCall(req).execute().use { resp ->
                         if (resp.isSuccessful) {
@@ -277,7 +283,7 @@ class OnlineManager {
                 } catch (e: Exception) {
                     Log.e("OnlineManager", "Polling Error: ${e.message}")
                 }
-                delay(1200L)
+                delay(3500L)
             }
         }
     }
@@ -328,7 +334,7 @@ class OnlineManager {
                             // Host already started game! Resend current game state immediately
                             broadcastState(_onlineState.value)
                             scope.launch {
-                                delay(200)
+                                delay(300)
                                 broadcastState(_onlineState.value)
                             }
                         }
@@ -351,6 +357,11 @@ class OnlineManager {
                                 }
                             }
                         }
+                    }
+                }
+                "RESYNC" -> {
+                    if (isHost) {
+                        broadcastState(_onlineState.value)
                     }
                 }
                 "PLAY_CARD" -> {
@@ -429,7 +440,6 @@ class OnlineManager {
         } else {
             val seq = ++guestActionSeq
             val playMsg = OnlineNetworkMessage(
-                id = java.util.UUID.randomUUID().toString(),
                 type = "PLAY_CARD",
                 senderId = 1,
                 roomCode = activeRoomCode,
@@ -440,9 +450,9 @@ class OnlineManager {
             )
             sendNetworkMessage(playMsg)
 
-            // Retry after 300ms if host hasn't processed turn yet (guards against lost packets)
+            // Retry after 400ms if host hasn't processed turn yet (guards against lost packets)
             scope.launch {
-                delay(300)
+                delay(400)
                 if (_onlineState.value.currentTurnIndex == 1 && _onlineState.value.isGameStarted) {
                     sendNetworkMessage(playMsg)
                 }
@@ -496,11 +506,7 @@ class OnlineManager {
         _onlineState.value = newState
         broadcastState(newState)
         scope.launch {
-            delay(150)
-            broadcastState(newState)
-            delay(350)
-            broadcastState(newState)
-            delay(700)
+            delay(250)
             broadcastState(newState)
         }
     }
@@ -871,26 +877,16 @@ class OnlineManager {
     fun resyncState() {
         val code = activeRoomCode
         if (code.isBlank()) return
-        scope.launch(Dispatchers.IO) {
-            try {
-                val topic = topicForRoom(code)
-                val req = Request.Builder()
-                    .url("https://ntfy.sh/$topic/json?poll=1&since=10s")
-                    .build()
-                client.newCall(req).execute().use { resp ->
-                    if (resp.isSuccessful) {
-                        val bodyText = resp.body?.string() ?: ""
-                        bodyText.lineSequence().forEach { line ->
-                            val trimmed = line.trim()
-                            if (trimmed.isNotEmpty()) {
-                                handleIncomingMessageText(trimmed)
-                            }
-                        }
-                    }
-                }
-            } catch (e: Exception) {
-                Log.e("OnlineManager", "Manual resync error: ${e.message}")
-            }
+        if (isHost) {
+            broadcastState(_onlineState.value)
+        } else {
+            sendNetworkMessage(
+                OnlineNetworkMessage(
+                    type = "RESYNC",
+                    senderId = 1,
+                    roomCode = code
+                )
+            )
         }
     }
 
@@ -898,8 +894,12 @@ class OnlineManager {
         joinJob?.cancel()
         joinJob = null
         _isJoining.value = false
-        streamJob?.cancel()
-        streamJob = null
+        try {
+            webSocket?.close(1000, "Reset")
+        } catch (e: Exception) {
+            Log.e("OnlineManager", "WS reset error: ${e.message}")
+        }
+        webSocket = null
         pollJob?.cancel()
         pollJob = null
         activeRoomCode = ""
@@ -921,8 +921,12 @@ class OnlineManager {
                 roomCode = activeRoomCode
             )
         )
-        streamJob?.cancel()
-        streamJob = null
+        try {
+            webSocket?.close(1000, "Leave")
+        } catch (e: Exception) {
+            Log.e("OnlineManager", "WS leave error: ${e.message}")
+        }
+        webSocket = null
         pollJob?.cancel()
         pollJob = null
         _onlineState.value = OnlineGameStateDto()
