@@ -1038,16 +1038,19 @@ fun PlayingCardView(
   val centerEmojiSize = if (isLarge) 32.sp else 24.sp
   val centerSuitSize = if (isLarge) 30.sp else 24.sp
 
-  Box(contentAlignment = Alignment.TopCenter) {
+  Box(
+    modifier = modifier,
+    contentAlignment = Alignment.TopCenter
+  ) {
     Box(
-      modifier = modifier
+      modifier = Modifier
         .width(cardWidth)
         .height(cardHeight)
         .shadow(if (highlightType != CardHighlightType.NONE) 8.dp else 3.dp, RoundedCornerShape(8.dp))
         .clip(RoundedCornerShape(8.dp))
         .background(Color.White)
         .border(borderWidth, borderColor, RoundedCornerShape(8.dp))
-        .then(if (onClick != null) Modifier.clickable { onClick() } else Modifier)
+        .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier)
         .padding(if (isLarge) 5.dp else 4.dp)
     ) {
       // Top-left rank & suit

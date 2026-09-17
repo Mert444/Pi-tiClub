@@ -442,9 +442,9 @@ class OnlineManager {
             val topic = topicForRoom(roomCode)
             while (isActive) {
                 try {
-                    // Poll recent messages with since=10s as a fallback every 3.5s
+                    // Poll recent messages with since=8s as a fast fallback every 1s
                     val req = Request.Builder()
-                        .url("https://ntfy.sh/$topic/json?poll=1&since=10s")
+                        .url("https://ntfy.sh/$topic/json?poll=1&since=8s")
                         .build()
                     client.newCall(req).execute().use { resp ->
                         if (resp.isSuccessful) {
@@ -460,7 +460,7 @@ class OnlineManager {
                 } catch (e: Exception) {
                     Log.e("OnlineManager", "Polling Error: ${e.message}")
                 }
-                delay(3500L)
+                delay(1000L)
             }
         }
     }
@@ -485,8 +485,8 @@ class OnlineManager {
             val msg = OnlineJsonHelper.jsonToMessage(rawMsg) ?: return
             if (msg.roomCode != activeRoomCode) return
 
-            // Deduplication check: drop duplicate network packets (NEVER drop JOIN_ROOM, SYNC_STATE or RESYNC)
-            if (msg.type != "JOIN_ROOM" && msg.type != "SYNC_STATE" && msg.type != "RESYNC" && msg.id.isNotEmpty() && !processedMessageIds.add(msg.id)) {
+            // Deduplication check: drop duplicate network packets (NEVER drop critical gameplay packets)
+            if (msg.type != "JOIN_ROOM" && msg.type != "SYNC_STATE" && msg.type != "RESYNC" && msg.type != "PLAY_CARD" && msg.id.isNotEmpty() && !processedMessageIds.add(msg.id)) {
                 return
             }
 
