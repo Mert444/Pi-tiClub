@@ -315,6 +315,21 @@ fun OnlineGameScreen(navController: NavController, gameViewModel: GameViewModel)
 
     val isMyTurn = onlineState.currentTurnIndex == myPlayerId
 
+    var landedCounts by remember(onlineState.dealAnimTrigger) {
+        mutableStateOf<List<Int>?>(if (onlineState.dealAnimTrigger > 0L) listOf(0, 0) else null)
+    }
+
+    LaunchedEffect(onlineState.dealAnimTrigger) {
+        if (onlineState.dealAnimTrigger > 0L) {
+            landedCounts = listOf(0, 0)
+            for (c in 1..4) {
+                kotlinx.coroutines.delay(180)
+                landedCounts = listOf(c, c)
+            }
+            landedCounts = null
+        }
+    }
+
     val feltGradient = Brush.radialGradient(
         colors = listOf(Color(0xFF0F3B6A), Color(0xFF0A2548), Color(0xFF051428)),
         radius = 1200f
@@ -405,8 +420,9 @@ fun OnlineGameScreen(navController: NavController, gameViewModel: GameViewModel)
             Spacer(modifier = Modifier.height(8.dp))
 
             // Opponent Hand (Facedown)
+            val opponentCardCount = if (landedCounts != null) landedCounts!![1] else opponentPlayer.hand.size
             Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                repeat(opponentPlayer.hand.size) {
+                repeat(opponentCardCount) {
                     PlaidCardBack(
                         modifier = Modifier
                             .width(52.dp)
@@ -579,22 +595,49 @@ fun OnlineGameScreen(navController: NavController, gameViewModel: GameViewModel)
             Spacer(modifier = Modifier.height(10.dp))
 
             // Your Interactive Hand Cards
+            val myHandToDisplay = if (landedCounts != null) myPlayer.hand.take(landedCounts!![0]) else myPlayer.hand
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                myPlayer.hand.forEachIndexed { index, card ->
+                myHandToDisplay.forEachIndexed { index, card ->
                     OnlineCardView(
                         card = card,
                         modifier = Modifier
                             .width(64.dp)
                             .height(92.dp)
-                            .shadow(if (isMyTurn) 8.dp else 2.dp, RoundedCornerShape(6.dp))
+                            .shadow(if (isMyTurn && landedCounts == null) 8.dp else 2.dp, RoundedCornerShape(6.dp))
                             .border(
-                                if (isMyTurn) 1.5.dp else 0.dp,
-                                if (isMyTurn) PrimaryYellow else Color.Transparent,
+                                if (isMyTurn && landedCounts == null) 1.5.dp else 0.dp,
+                                if (isMyTurn && landedCounts == null) PrimaryYellow else Color.Transparent,
                                 RoundedCornerShape(6.dp)
                             )
-                            .clickable(enabled = isMyTurn) {
+                            .clickable(enabled = isMyTurn && landedCounts == null) {
                                 onlineManager.playCard(index)
                             }
+                    )
+                }
+            }
+        }
+
+        // Card Dealing Banner Overlay
+        if (landedCounts != null) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.Center)
+                    .background(Color.Black.copy(alpha = 0.88f), RoundedCornerShape(16.dp))
+                    .border(1.5.dp, PrimaryYellow, RoundedCornerShape(16.dp))
+                    .padding(horizontal = 24.dp, vertical = 14.dp)
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(20.dp),
+                        color = PrimaryYellow,
+                        strokeWidth = 2.dp
+                    )
+                    Spacer(modifier = Modifier.width(12.dp))
+                    Text(
+                        "🎴 KARTEN WERDEN GEMISCHT & VERTEILT...",
+                        color = PrimaryYellow,
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Bold
                     )
                 }
             }

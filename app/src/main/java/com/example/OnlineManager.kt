@@ -35,6 +35,7 @@ data class OnlinePlayerDto(
 )
 
 data class OnlineGameStateDto(
+    val stateVersion: Long = 0L,
     val roomCode: String = "",
     val hostName: String = "Host",
     val guestName: String? = null,
@@ -93,6 +94,7 @@ class OnlineManager {
     private var isHost = false
     private var activeRoomCode = ""
     private var myName = "Spieler"
+    private var currentVersion: Long = 0L
 
     fun createRoom(hostName: String): String {
         val code = (1000..9999).random().toString()
@@ -227,7 +229,7 @@ class OnlineManager {
                 "SYNC_STATE" -> {
                     if (msg.senderId != _myPlayerId.value) {
                         val newGameState = stateAdapter.fromJson(msg.stateJson)
-                        if (newGameState != null) {
+                        if (newGameState != null && newGameState.stateVersion > _onlineState.value.stateVersion) {
                             _onlineState.value = newGameState
                         }
                     }
@@ -307,7 +309,10 @@ class OnlineManager {
         val guestHand = remainingAfterCenter.drop(4).take(4)
         val remainingDeck = remainingAfterCenter.drop(8)
 
+        currentVersion = 1L
+
         val newState = OnlineGameStateDto(
+            stateVersion = currentVersion,
             roomCode = activeRoomCode,
             hostName = myName,
             guestName = guestName,
@@ -322,7 +327,8 @@ class OnlineManager {
             roundNumber = 1,
             statusMessage = "SPIEL GESTARTET! $myName IST AM ZUG",
             isGameStarted = true,
-            isGuestConnected = true
+            isGuestConnected = true,
+            dealAnimTrigger = System.currentTimeMillis()
         )
 
         _onlineState.value = newState
@@ -422,6 +428,8 @@ class OnlineManager {
 
         val isRoundOver = finalPlayers.all { it.hand.isEmpty() } && finalDeck.isEmpty()
 
+        currentVersion++
+
         if (isRoundOver) {
             // Calculate final round scores including majority cards (+3)
             val p0 = finalPlayers[0]
@@ -443,6 +451,7 @@ class OnlineManager {
             val winner = if (matchOver) ratedPlayers.maxByOrNull { it.totalScore }?.name else null
 
             val finalState = currentState.copy(
+                stateVersion = currentVersion,
                 deck = emptyList(),
                 centerPile = emptyList(),
                 players = ratedPlayers,
@@ -466,6 +475,7 @@ class OnlineManager {
             }
 
             val updatedState = currentState.copy(
+                stateVersion = currentVersion,
                 deck = finalDeck,
                 centerPile = newCenterPile,
                 players = finalPlayers,
@@ -476,7 +486,8 @@ class OnlineManager {
                 lastPistiMessage = pistiNotice,
                 lastScorePoints = if (captured) (newRoundScore - player.roundScore) else 0,
                 lastScorePlayerName = if (captured) player.name else null,
-                isGameStarted = true
+                isGameStarted = true,
+                dealAnimTrigger = if (dealTriggered) System.currentTimeMillis() else currentState.dealAnimTrigger
             )
 
             _onlineState.value = updatedState
@@ -504,7 +515,10 @@ class OnlineManager {
 
         val starterName = resetPlayers[nextStarter].name
 
+        currentVersion++
+
         val newState = currentState.copy(
+            stateVersion = currentVersion,
             centerPile = center,
             deck = remainingDeck,
             players = resetPlayers,
@@ -578,6 +592,28 @@ class OnlineManager {
                 list.add(OnlineCardDto(s, r, isFaceUp = true))
             }
         }
-        return list.shuffled(Random(System.currentTimeMillis()))
+
+        val secureRandom = java.security.SecureRandom()
+        repeat(7) {
+            list.shuffle(secureRandom)
+        }
+
+        val cutPoint = 12 + secureRandom.nextInt(28)
+        val cutDeck = (list.drop(cutPoint) + list.take(cutPoint)).toMutableList()
+        cutDeck.shuffle(secureRandom)
+
+        // Ensure top card of center pile is not a Jack
+        val centerCards = cutDeck.take(4).toMutableList()
+        val remDeck = cutDeck.drop(4).toMutableList()
+
+        if (centerCards.last().rank == "JACK") {
+            val nonJackIndex = remDeck.indexOfFirst { it.rank != "JACK" }
+            if (nonJackIndex != -1) {
+                val temp = centerCards[3]
+                centerCards[3] = remDeck[nonJackIndex]
+                remDeck[nonJackIndex] = temp
+            }
+        }
+        return centerCards + remDeck
     }
 }
