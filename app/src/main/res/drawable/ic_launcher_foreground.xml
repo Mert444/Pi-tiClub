@@ -4,10 +4,50 @@
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
+
+    <!-- CARD 1 (LEFT - HEARTS) SHADOW & BODY -->
     <path
-        android:fillColor="#FFCC4D"
-        android:pathData="M 54,20 L 70,40 L 64,60 L 58,80 L 50,80 L 44,60 L 38,40 Z"/>
+        android:fillColor="#20000000"
+        android:pathData="M 28,34 C 28,30 30,28 34,28 L 56,28 C 60,28 62,30 62,34 L 62,72 C 62,76 60,78 56,78 L 34,78 C 30,78 28,76 28,72 Z"/>
     <path
         android:fillColor="#FFFFFF"
-        android:pathData="M 54,25 C 65,25 75,35 75,45 C 75,55 54,75 54,75 C 54,75 33,55 33,45 C 33,35 43,25 54,25 Z"/>
+        android:strokeColor="#CCCCCC"
+        android:strokeWidth="1"
+        android:pathData="M 26,32 C 26,28 28,26 32,26 L 54,26 C 58,26 60,28 60,32 L 60,70 C 60,74 58,76 54,76 L 32,76 C 28,76 26,74 26,70 Z"/>
+    
+    <!-- Heart Suit Symbol -->
+    <path
+        android:fillColor="#D32F2F"
+        android:pathData="M 43,45 C 41,41 35,42 35,47 C 35,52 43,58 43,58 C 43,58 51,52 51,47 C 51,42 45,41 43,45 Z"/>
+    <path
+        android:fillColor="#D32F2F"
+        android:pathData="M 30,30 L 33,30 L 33,34 L 30,34 Z"/>
+
+    <!-- CARD 2 (RIGHT - SPADES) SHADOW & BODY -->
+    <path
+        android:fillColor="#30000000"
+        android:pathData="M 50,38 C 50,34 52,32 56,32 L 78,32 C 82,32 84,34 84,38 L 84,76 C 84,80 82,82 78,82 L 56,82 C 52,82 50,80 50,76 Z"/>
+    <path
+        android:fillColor="#FAFAFA"
+        android:strokeColor="#E0E0E0"
+        android:strokeWidth="1"
+        android:pathData="M 48,36 C 48,32 50,30 54,30 L 76,30 C 80,30 82,32 82,36 L 82,74 C 82,78 80,80 76,80 L 54,80 C 50,80 48,78 48,74 Z"/>
+
+    <!-- Spade Suit Symbol -->
+    <path
+        android:fillColor="#212121"
+        android:pathData="M 65,46 C 65,46 57,55 57,59 C 57,62 60,64 63,63 C 64,62 65,61 65,61 C 65,61 66,62 67,63 C 70,64 73,62 73,59 C 73,55 65,46 65,46 Z"/>
+    <path
+        android:fillColor="#212121"
+        android:pathData="M 63,62 L 67,62 L 68,68 L 62,68 Z"/>
+
+    <!-- GOLDEN PIŞTI FLAME BADGE -->
+    <path
+        android:fillColor="#FFC107"
+        android:strokeColor="#FFA000"
+        android:strokeWidth="1"
+        android:pathData="M 54,20 C 56,25 60,26 62,28 C 65,31 64,36 60,38 C 56,40 51,38 49,35 C 47,32 48,27 51,25 C 50,28 52,30 54,30 C 56,30 57,28 56,26 C 55,24 53,22 54,20 Z"/>
+    <path
+        android:fillColor="#FF5722"
+        android:pathData="M 54,28 C 55,30 57,31 58,32 C 59,34 58,36 56,37 C 54,38 52,37 51,35 C 50,33 51,31 53,30 C 52,31 53,33 54,33 C 55,33 55,32 55,31 Z"/>
 </vector>
