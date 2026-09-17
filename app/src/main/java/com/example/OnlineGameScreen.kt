@@ -1026,8 +1026,8 @@ fun OnlineGameScreen(navController: NavController, gameViewModel: GameViewModel)
 
                     if (!isHost) {
                         Text(
-                            "Warte auf Host für nächste Runde...",
-                            color = Color.White.copy(alpha = 0.7f),
+                            "Tippe auf 'Nächste Runde anfordern' oder warte auf den Host...",
+                            color = Color.White.copy(alpha = 0.8f),
                             fontSize = 12.sp,
                             modifier = Modifier.padding(top = 4.dp)
                         )
@@ -1040,7 +1040,18 @@ fun OnlineGameScreen(navController: NavController, gameViewModel: GameViewModel)
                         onClick = { onlineManager.startNextRound() },
                         colors = ButtonDefaults.buttonColors(containerColor = PrimaryYellow, contentColor = OnPrimaryYellow)
                     ) {
+                        Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(modifier = Modifier.width(4.dp))
                         Text("Nächste Runde Starten", fontWeight = FontWeight.Bold)
+                    }
+                } else {
+                    Button(
+                        onClick = { onlineManager.requestNextRound() },
+                        colors = ButtonDefaults.buttonColors(containerColor = PrimaryYellow, contentColor = OnPrimaryYellow)
+                    ) {
+                        Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("Nächste Runde anfordern", fontWeight = FontWeight.Bold)
                     }
                 }
             },
@@ -1085,16 +1096,34 @@ fun OnlineGameScreen(navController: NavController, gameViewModel: GameViewModel)
                 }
             },
             confirmButton = {
-                Button(
-                    onClick = {
-                        onlineManager.leaveRoom()
-                        navController.navigate("menu") {
-                            popUpTo("online_game") { inclusive = true }
-                        }
-                    },
-                    colors = ButtonDefaults.buttonColors(containerColor = PrimaryYellow, contentColor = OnPrimaryYellow)
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    Text("Zurück zum Hauptmenü", fontWeight = FontWeight.Bold)
+                    Button(
+                        onClick = {
+                            onlineManager.restartMatch()
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = PrimaryYellow, contentColor = OnPrimaryYellow),
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("Neues Match (Revanche)", fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                    }
+                    OutlinedButton(
+                        onClick = {
+                            onlineManager.leaveRoom()
+                            navController.navigate("menu") {
+                                popUpTo("online_game") { inclusive = true }
+                            }
+                        },
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.White),
+                        border = androidx.compose.foundation.BorderStroke(1.dp, Color.White.copy(alpha = 0.6f)),
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Text("Hauptmenü", fontSize = 12.sp)
+                    }
                 }
             },
             containerColor = BackgroundGreen

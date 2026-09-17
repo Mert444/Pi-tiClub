@@ -179,10 +179,23 @@ class OnlineManager {
         startRawStream(cleanCode)
         startSafetyPoller(cleanCode)
 
+        // Send first JOIN_ROOM immediately
+        sendNetworkMessage(
+            OnlineNetworkMessage(
+                id = java.util.UUID.randomUUID().toString(),
+                type = "JOIN_ROOM",
+                senderId = 1,
+                roomCode = cleanCode,
+                stateJson = guestName
+            )
+        )
+
         joinJob?.cancel()
         joinJob = scope.launch(Dispatchers.IO) {
-            var attempt = 0
+            var attempt = 1
             while (isActive && !_onlineState.value.isGameStarted) {
+                delay(600L)
+                if (_onlineState.value.isGameStarted) break
                 attempt++
                 _connectionStatus.value = "Suche Freund in Raum $cleanCode... ($attempt)"
                 sendNetworkMessage(
@@ -194,7 +207,6 @@ class OnlineManager {
                         stateJson = guestName
                     )
                 )
-                delay(1000L)
             }
         }
         onResult(true, "Verbindungsanfrage an Raum $cleanCode gesendet!")
@@ -231,7 +243,7 @@ class OnlineManager {
                 } catch (e: Exception) {
                     Log.e("OnlineManager", "Stream error: ${e.message}")
                 }
-                delay(1000L)
+                delay(500L)
             }
         }
     }
@@ -241,9 +253,9 @@ class OnlineManager {
         pollJob = scope.launch(Dispatchers.IO) {
             while (isActive) {
                 try {
-                    // Poll recent messages with generous window (30s) so latency or clock drift doesn't drop messages
+                    // Poll with since=all so no initial JOIN_ROOM, SYNC_STATE or game starts are missed due to clock drift or network timing
                     val req = Request.Builder()
-                        .url("https://ntfy.sh/pisti_room_$roomCode/json?poll=1&since=30s")
+                        .url("https://ntfy.sh/pisti_room_$roomCode/json?poll=1&since=all")
                         .build()
                     client.newCall(req).execute().use { resp ->
                         if (resp.isSuccessful) {
@@ -259,7 +271,7 @@ class OnlineManager {
                 } catch (e: Exception) {
                     Log.e("OnlineManager", "Polling Error: ${e.message}")
                 }
-                delay(1200L)
+                delay(750L)
             }
         }
     }
@@ -321,9 +333,9 @@ class OnlineManager {
                         val newGameState = stateAdapter.fromJson(msg.stateJson)
                         if (newGameState != null) {
                             val curVer = _onlineState.value.stateVersion
-                            // STRICT MONOTONIC VERSION CHECK:
-                            // NEVER accept older or equal versions, preventing game state rewinds & card flickering
-                            if (newGameState.stateVersion > curVer || (curVer == 0L && newGameState.isGameStarted)) {
+                            val isCurrentlyStarted = _onlineState.value.isGameStarted
+                            // Accept if new version is newer, or if guest has not started the game yet and received a started game
+                            if (newGameState.stateVersion > curVer || (!isCurrentlyStarted && newGameState.isGameStarted)) {
                                 _onlineState.value = newGameState
                                 if (newGameState.isGameStarted) {
                                     _isJoining.value = false
@@ -340,6 +352,16 @@ class OnlineManager {
                         if (_onlineState.value.currentTurnIndex == 1) {
                             processOnlineCardPlay(1, msg.cardIndex, msg.cardSuit, msg.cardRank)
                         }
+                    }
+                }
+                "REQUEST_NEXT_ROUND" -> {
+                    if (isHost && !_onlineState.value.isMatchOver) {
+                        startNextRound()
+                    }
+                }
+                "REQUEST_RESTART_MATCH" -> {
+                    if (isHost) {
+                        restartMatch()
                     }
                 }
                 "LEAVE_ROOM" -> {
@@ -470,6 +492,8 @@ class OnlineManager {
             delay(150)
             broadcastState(newState)
             delay(350)
+            broadcastState(newState)
+            delay(700)
             broadcastState(newState)
         }
     }
@@ -735,6 +759,89 @@ class OnlineManager {
         scope.launch {
             delay(150)
             broadcastState(newState)
+            delay(350)
+            broadcastState(newState)
+        }
+    }
+
+    fun requestNextRound() {
+        if (isHost) {
+            startNextRound()
+        } else {
+            sendNetworkMessage(
+                OnlineNetworkMessage(
+                    type = "REQUEST_NEXT_ROUND",
+                    senderId = 1,
+                    roomCode = activeRoomCode
+                )
+            )
+        }
+    }
+
+    fun restartMatch() {
+        if (!isHost) {
+            sendNetworkMessage(
+                OnlineNetworkMessage(
+                    type = "REQUEST_RESTART_MATCH",
+                    senderId = 1,
+                    roomCode = activeRoomCode
+                )
+            )
+            return
+        }
+
+        val currentState = _onlineState.value
+        val fullDeck = createShuffledDeck()
+        val center = fullDeck.take(4).mapIndexed { idx, card ->
+            card.copy(isFaceUp = idx == 3)
+        }
+        val remainingAfterCenter = fullDeck.drop(4)
+
+        val hostHand = remainingAfterCenter.take(4)
+        val guestHand = remainingAfterCenter.drop(4).take(4)
+        hostRemainingDeck = remainingAfterCenter.drop(8)
+
+        val resetPlayers = currentState.players.map { p ->
+            val hand = if (p.id == 0) hostHand else guestHand
+            p.copy(
+                hand = hand,
+                capturedCount = 0,
+                roundScore = 0,
+                totalScore = 0,
+                pistiCount = 0
+            )
+        }
+
+        currentVersion++
+
+        val freshState = currentState.copy(
+            stateVersion = currentVersion,
+            centerPile = center,
+            deck = emptyList(),
+            deckSize = hostRemainingDeck.size,
+            players = resetPlayers,
+            currentTurnIndex = 0,
+            starterPlayerIndex = 0,
+            lastCaptorIndex = -1,
+            roundNumber = 1,
+            targetScore = 101,
+            isMatchOver = false,
+            matchWinnerName = null,
+            overshootMessage = null,
+            statusMessage = "NEUES MATCH GESTARTET! ${resetPlayers.firstOrNull()?.name ?: "Host"} IST AM ZUG",
+            lastPistiMessage = null,
+            isGameStarted = true,
+            showRoundEndSummary = false,
+            dealAnimTrigger = System.currentTimeMillis()
+        )
+
+        _onlineState.value = freshState
+        broadcastState(freshState)
+        scope.launch {
+            delay(150)
+            broadcastState(freshState)
+            delay(350)
+            broadcastState(freshState)
         }
     }
 
