@@ -202,8 +202,7 @@ class OnlineManager {
                 } catch (e: Exception) {
                     Log.e("OnlineManager", "Polling Error: ${e.message}")
                 }
-                val pollDelay = if (!_onlineState.value.isGameStarted) 300L else 1000L
-                delay(pollDelay)
+                delay(250L) // Fast 250ms polling loop for instant sync
             }
         }
     }
@@ -232,7 +231,7 @@ class OnlineManager {
                 "SYNC_STATE" -> {
                     if (msg.senderId != _myPlayerId.value) {
                         val newGameState = stateAdapter.fromJson(msg.stateJson)
-                        if (newGameState != null && newGameState.stateVersion > _onlineState.value.stateVersion) {
+                        if (newGameState != null && newGameState.stateVersion >= _onlineState.value.stateVersion) {
                             _onlineState.value = newGameState
                         }
                     }
@@ -289,16 +288,111 @@ class OnlineManager {
         if (isHost) {
             processOnlineCardPlay(0, cardIndex)
         } else {
-            // Guest sends card play request to Host
-            sendNetworkMessage(
-                OnlineNetworkMessage(
-                    type = "PLAY_CARD",
-                    senderId = 1,
-                    roomCode = activeRoomCode,
-                    cardIndex = cardIndex
-                )
+            // Apply optimistic card play locally on Guest device so UI updates instantly (0ms lag!)
+            optimisticGuestCardPlay(cardIndex)
+
+            val playMsg = OnlineNetworkMessage(
+                type = "PLAY_CARD",
+                senderId = 1,
+                roomCode = activeRoomCode,
+                cardIndex = cardIndex
             )
+            sendNetworkMessage(playMsg)
+            // Burst send to ensure zero loss
+            scope.launch {
+                delay(100)
+                sendNetworkMessage(playMsg)
+            }
         }
+    }
+
+    private fun optimisticGuestCardPlay(cardIndex: Int) {
+        val currentState = _onlineState.value
+        val guest = currentState.players.getOrNull(1) ?: return
+        if (cardIndex !in guest.hand.indices) return
+
+        val playedCard = guest.hand[cardIndex]
+        val newHand = guest.hand.filterIndexed { idx, _ -> idx != cardIndex }
+
+        val oldCenter = currentState.centerPile
+        val topCard = oldCenter.lastOrNull()
+
+        var captured = false
+        var isPisti = false
+        var pistiPoints = 0
+        var newCenterPile = oldCenter + playedCard.copy(isFaceUp = true)
+
+        if (topCard != null) {
+            if (playedCard.rank == topCard.rank) {
+                captured = true
+                if (oldCenter.size == 1) {
+                    isPisti = true
+                    pistiPoints = if (playedCard.rank == "JACK") 20 else 10
+                }
+            } else if (playedCard.rank == "JACK") {
+                captured = true
+            }
+        }
+
+        var newCapturedCount = guest.capturedCount
+        var newRoundScore = guest.roundScore
+        var pistiNotice: String? = null
+
+        if (captured) {
+            newCapturedCount += newCenterPile.size
+            val cardPoints = newCenterPile.sumOf { getCardPoints(it) }
+            newRoundScore += cardPoints + pistiPoints
+            if (isPisti) {
+                pistiNotice = "🔥 PIŞTI (+${pistiPoints} P) FÜR ${guest.name.uppercase()}!"
+            }
+            newCenterPile = emptyList()
+        }
+
+        val updatedGuest = guest.copy(
+            hand = newHand,
+            capturedCount = newCapturedCount,
+            roundScore = newRoundScore
+        )
+
+        val updatedPlayers = currentState.players.map {
+            if (it.id == 1) updatedGuest else it
+        }
+
+        val allHandsEmpty = updatedPlayers.all { it.hand.isEmpty() }
+        var finalDeck = currentState.deck
+        var finalPlayers = updatedPlayers
+        var dealTriggered = false
+
+        if (allHandsEmpty && finalDeck.isNotEmpty()) {
+            val p0Hand = finalDeck.take(4)
+            val p1Hand = finalDeck.drop(4).take(4)
+            finalDeck = finalDeck.drop(8)
+
+            finalPlayers = updatedPlayers.map {
+                when (it.id) {
+                    0 -> it.copy(hand = p0Hand)
+                    1 -> it.copy(hand = p1Hand)
+                    else -> it
+                }
+            }
+            dealTriggered = true
+        }
+
+        val hostName = currentState.hostName
+        currentVersion++
+
+        val optimisticState = currentState.copy(
+            stateVersion = currentVersion,
+            deck = finalDeck,
+            centerPile = newCenterPile,
+            players = finalPlayers,
+            currentTurnIndex = 0, // Now Host turn
+            statusMessage = if (dealTriggered) "NEUE HANDKARTEN! $hostName IST AM ZUG" else "$hostName IST AM ZUG",
+            lastPistiMessage = pistiNotice,
+            dealAnimTrigger = if (dealTriggered) System.currentTimeMillis() else 0L
+        )
+
+        _onlineState.value = optimisticState
     }
 
     private fun startNewOnlineGame(guestName: String) {
@@ -456,7 +550,7 @@ class OnlineManager {
             val finalState = currentState.copy(
                 stateVersion = currentVersion,
                 deck = emptyList(),
-                centerPile = emptyList(),
+                centerPile = newCenterPile,
                 players = ratedPlayers,
                 currentTurnIndex = 0,
                 lastCaptorIndex = newLastCaptor,
