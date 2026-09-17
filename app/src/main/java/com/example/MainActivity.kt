@@ -1268,33 +1268,37 @@ fun FannedPlayerHand(
   onCardClick: (Card) -> Unit,
   modifier: Modifier = Modifier
 ) {
-  Box(
+  val total = hand.size
+  val topCard = centerPile.lastOrNull()
+  val centerCount = centerPile.size
+
+  val cardWidth = when (total) {
+    1 -> 90.dp
+    2 -> 86.dp
+    3 -> 82.dp
+    else -> 76.dp
+  }
+  val cardHeight = when (total) {
+    1 -> 132.dp
+    2 -> 126.dp
+    3 -> 122.dp
+    else -> 116.dp
+  }
+  val spacing = when (total) {
+    1 -> 0.dp
+    2 -> 12.dp
+    3 -> 8.dp
+    else -> 6.dp
+  }
+
+  Row(
     modifier = modifier
       .fillMaxWidth()
-      .height(136.dp),
-    contentAlignment = Alignment.BottomCenter
+      .padding(horizontal = 4.dp),
+    horizontalArrangement = Arrangement.spacedBy(spacing, Alignment.CenterHorizontally),
+    verticalAlignment = Alignment.Bottom
   ) {
-    val total = hand.size
-    val topCard = centerPile.lastOrNull()
-    val centerCount = centerPile.size
-
-    hand.forEachIndexed { index, card ->
-      val angle = if (total > 1) {
-        val startAngle = -10f
-        val step = 20f / (total - 1)
-        startAngle + index * step
-      } else 0f
-
-      val yOffset = if (total > 1) {
-        val centerIndex = (total - 1) / 2f
-        val dist = Math.abs(index - centerIndex)
-        (dist * dist * 3).dp
-      } else 0.dp
-
-      val xOffset = if (total > 1) {
-        (((index - (total - 1) / 2f) * 50).dp)
-      } else 0.dp
-
+    hand.forEach { card ->
       val highlightType = if (isMyTurn && topCard != null) {
         val matches = card.rank == topCard.rank || card.rank == Rank.JACK
         if (matches) {
@@ -1304,12 +1308,9 @@ fun FannedPlayerHand(
 
       PlayingCardView(
         card = card,
-        cardWidth = 84.dp,
-        cardHeight = 124.dp,
+        cardWidth = cardWidth,
+        cardHeight = cardHeight,
         highlightType = highlightType,
-        modifier = Modifier
-          .offset(x = xOffset, y = -yOffset)
-          .rotate(angle),
         onClick = {
           if (isMyTurn) {
             onCardClick(card)

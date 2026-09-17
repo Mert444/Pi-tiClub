@@ -294,6 +294,7 @@ class OnlineManager {
     private var myName = "Spieler"
     private var currentVersion: Long = 0L
     private var guestActionSeq: Long = 0L
+    private var lastProcessedGuestActionSeq: Long = 0L
     private var hostRemainingDeck: List<OnlineCardDto> = emptyList()
 
     private var joinJob: Job? = null
@@ -489,7 +490,7 @@ class OnlineManager {
             if (msg.roomCode != activeRoomCode) return
 
             // Deduplication check: drop duplicate network packets (NEVER drop critical gameplay packets)
-            if (msg.type != "JOIN_ROOM" && msg.type != "SYNC_STATE" && msg.type != "RESYNC" && msg.type != "PLAY_CARD" && msg.id.isNotEmpty() && !processedMessageIds.add(msg.id)) {
+            if (msg.type != "JOIN_ROOM" && msg.type != "SYNC_STATE" && msg.type != "RESYNC" && msg.id.isNotEmpty() && !processedMessageIds.add(msg.id)) {
                 return
             }
 
@@ -535,8 +536,15 @@ class OnlineManager {
                 }
                 "PLAY_CARD" -> {
                     if (isHost && msg.senderId == 1) {
-                        if (_onlineState.value.currentTurnIndex == 1) {
-                            processOnlineCardPlay(1, msg.cardIndex, msg.cardSuit, msg.cardRank)
+                        if (msg.actionSeq > 0 && msg.actionSeq <= lastProcessedGuestActionSeq) {
+                            Log.d("OnlineManager", "Dropping already processed guest action seq: ${msg.actionSeq}")
+                            return
+                        }
+                        if (_onlineState.value.currentTurnIndex == 1 && _onlineState.value.isGameStarted) {
+                            val played = processOnlineCardPlay(1, msg.cardIndex, msg.cardSuit, msg.cardRank)
+                            if (played && msg.actionSeq > 0) {
+                                lastProcessedGuestActionSeq = msg.actionSeq
+                            }
                         }
                     }
                 }
@@ -609,6 +617,7 @@ class OnlineManager {
         } else {
             val seq = ++guestActionSeq
             val playMsg = OnlineNetworkMessage(
+                id = java.util.UUID.randomUUID().toString(),
                 type = "PLAY_CARD",
                 senderId = 1,
                 roomCode = activeRoomCode,
@@ -618,14 +627,6 @@ class OnlineManager {
                 actionSeq = seq
             )
             sendNetworkMessage(playMsg)
-
-            // Retry after 400ms if host hasn't processed turn yet (guards against lost packets)
-            scope.launch {
-                delay(400)
-                if (_onlineState.value.currentTurnIndex == 1 && _onlineState.value.isGameStarted) {
-                    sendNetworkMessage(playMsg)
-                }
-            }
         }
     }
 
@@ -705,19 +706,24 @@ class OnlineManager {
         }
     }
 
-    private fun processOnlineCardPlay(playerIndex: Int, cardIndex: Int, cardSuit: String = "", cardRank: String = "") {
+    private fun processOnlineCardPlay(playerIndex: Int, cardIndex: Int, cardSuit: String = "", cardRank: String = ""): Boolean {
         val currentState = _onlineState.value
-        val player = currentState.players.getOrNull(playerIndex) ?: return
+        if (!currentState.isGameStarted || currentState.isMatchOver) return false
+        if (currentState.currentTurnIndex != playerIndex) return false
 
-        // Robust card matching by suit and rank to eliminate any index desync
-        val actualIndex = if (cardSuit.isNotEmpty() && cardRank.isNotEmpty()) {
-            val found = player.hand.indexOfFirst { it.suit == cardSuit && it.rank == cardRank }
-            if (found != -1) found else cardIndex
+        val player = currentState.players.getOrNull(playerIndex) ?: return false
+
+        // Strict card matching by suit and rank; NEVER fall back to another card if specified card is not in hand!
+        val actualIndex = if (cardSuit.isNotBlank() && cardRank.isNotBlank()) {
+            player.hand.indexOfFirst { it.suit == cardSuit && it.rank == cardRank }
         } else {
-            cardIndex
+            if (cardIndex in player.hand.indices) cardIndex else -1
         }
 
-        if (actualIndex !in player.hand.indices) return
+        if (actualIndex == -1 || actualIndex !in player.hand.indices) {
+            Log.d("OnlineManager", "Card not in hand, ignoring: $cardRank of $cardSuit (idx $cardIndex)")
+            return false
+        }
 
         val playedCard = player.hand[actualIndex]
         val newHand = player.hand.filterIndexed { idx, _ -> idx != actualIndex }
@@ -890,6 +896,7 @@ class OnlineManager {
                 delay(150)
                 broadcastState(finalState)
             }
+            return true
         } else {
             val nextPlayerName = finalPlayers[nextTurn].name
             val statusMsg = if (dealTriggered) {
@@ -920,6 +927,7 @@ class OnlineManager {
                 delay(120)
                 broadcastState(updatedState)
             }
+            return true
         }
     }
 
@@ -1113,6 +1121,8 @@ class OnlineManager {
         activeRoomCode = ""
         isHost = false
         hostRemainingDeck = emptyList()
+        guestActionSeq = 0L
+        lastProcessedGuestActionSeq = 0L
         processedMessageIds.clear()
         _onlineState.value = OnlineGameStateDto()
         _connectionStatus.value = "Bereit"
