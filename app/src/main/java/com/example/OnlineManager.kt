@@ -1,8 +1,6 @@
 package com.example
 
 import android.util.Log
-import com.squareup.moshi.Moshi
-import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -16,6 +14,8 @@ import kotlinx.coroutines.launch
 import okhttp3.*
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.RequestBody.Companion.toRequestBody
+import org.json.JSONArray
+import org.json.JSONObject
 import java.io.IOException
 import java.util.Collections
 import java.util.concurrent.TimeUnit
@@ -81,16 +81,193 @@ data class OnlineNetworkMessage(
     val stateJson: String = ""
 )
 
+object OnlineJsonHelper {
+    fun cardToJson(c: OnlineCardDto): JSONObject {
+        return JSONObject().apply {
+            put("s", c.suit)
+            put("r", c.rank)
+            put("u", c.isFaceUp)
+        }
+    }
+
+    fun jsonToCard(obj: JSONObject): OnlineCardDto {
+        return OnlineCardDto(
+            suit = obj.optString("s", "HEARTS"),
+            rank = obj.optString("r", "TWO"),
+            isFaceUp = obj.optBoolean("u", true)
+        )
+    }
+
+    fun playerToJson(p: OnlinePlayerDto): JSONObject {
+        val arr = JSONArray()
+        p.hand.forEach { arr.put(cardToJson(it)) }
+        return JSONObject().apply {
+            put("id", p.id)
+            put("name", p.name)
+            put("hand", arr)
+            put("c", p.capturedCount)
+            put("rs", p.roundScore)
+            put("ts", p.totalScore)
+            put("pc", p.pistiCount)
+        }
+    }
+
+    fun jsonToPlayer(obj: JSONObject): OnlinePlayerDto {
+        val handList = mutableListOf<OnlineCardDto>()
+        val arr = obj.optJSONArray("hand")
+        if (arr != null) {
+            for (i in 0 until arr.length()) {
+                val cardObj = arr.optJSONObject(i)
+                if (cardObj != null) handList.add(jsonToCard(cardObj))
+            }
+        }
+        return OnlinePlayerDto(
+            id = obj.optInt("id", 0),
+            name = obj.optString("name", "Spieler"),
+            hand = handList,
+            capturedCount = obj.optInt("c", 0),
+            roundScore = obj.optInt("rs", 0),
+            totalScore = obj.optInt("ts", 0),
+            pistiCount = obj.optInt("pc", 0)
+        )
+    }
+
+    fun stateToJson(s: OnlineGameStateDto): String {
+        val pileArr = JSONArray()
+        s.centerPile.forEach { pileArr.put(cardToJson(it)) }
+        val playersArr = JSONArray()
+        s.players.forEach { playersArr.put(playerToJson(it)) }
+
+        val obj = JSONObject().apply {
+            put("v", s.stateVersion)
+            put("rc", s.roomCode)
+            put("hn", s.hostName)
+            put("gn", s.guestName ?: "")
+            put("cp", pileArr)
+            put("ds", s.deckSize)
+            put("ps", playersArr)
+            put("ct", s.currentTurnIndex)
+            put("sp", s.starterPlayerIndex)
+            put("lc", s.lastCaptorIndex)
+            put("rn", s.roundNumber)
+            put("tg", s.targetScore)
+            put("mo", s.isMatchOver)
+            put("wn", s.matchWinnerName ?: "")
+            put("om", s.overshootMessage ?: "")
+            put("sm", s.statusMessage)
+            put("pm", s.lastPistiMessage ?: "")
+            put("gs", s.isGameStarted)
+            put("gc", s.isGuestConnected)
+            put("se", s.showRoundEndSummary)
+            put("lp", s.lastScorePoints)
+            put("ln", s.lastScorePlayerName ?: "")
+            put("at", s.dealAnimTrigger)
+        }
+        return obj.toString()
+    }
+
+    fun jsonToState(jsonStr: String): OnlineGameStateDto? {
+        return try {
+            val obj = JSONObject(jsonStr)
+            val pileList = mutableListOf<OnlineCardDto>()
+            val pileArr = obj.optJSONArray("cp")
+            if (pileArr != null) {
+                for (i in 0 until pileArr.length()) {
+                    val cObj = pileArr.optJSONObject(i)
+                    if (cObj != null) pileList.add(jsonToCard(cObj))
+                }
+            }
+            val playersList = mutableListOf<OnlinePlayerDto>()
+            val psArr = obj.optJSONArray("ps")
+            if (psArr != null) {
+                for (i in 0 until psArr.length()) {
+                    val pObj = psArr.optJSONObject(i)
+                    if (pObj != null) playersList.add(jsonToPlayer(pObj))
+                }
+            }
+
+            OnlineGameStateDto(
+                stateVersion = obj.optLong("v", 0L),
+                roomCode = obj.optString("rc", ""),
+                hostName = obj.optString("hn", "Host"),
+                guestName = obj.optString("gn").takeIf { it.isNotEmpty() },
+                centerPile = pileList,
+                deck = emptyList(),
+                deckSize = obj.optInt("ds", 0),
+                players = playersList,
+                currentTurnIndex = obj.optInt("ct", 0),
+                starterPlayerIndex = obj.optInt("sp", 0),
+                lastCaptorIndex = obj.optInt("lc", -1),
+                roundNumber = obj.optInt("rn", 1),
+                targetScore = obj.optInt("tg", 101),
+                isMatchOver = obj.optBoolean("mo", false),
+                matchWinnerName = obj.optString("wn").takeIf { it.isNotEmpty() },
+                overshootMessage = obj.optString("om").takeIf { it.isNotEmpty() },
+                statusMessage = obj.optString("sm", ""),
+                lastPistiMessage = obj.optString("pm").takeIf { it.isNotEmpty() },
+                isGameStarted = obj.optBoolean("gs", false),
+                isGuestConnected = obj.optBoolean("gc", false),
+                showRoundEndSummary = obj.optBoolean("se", false),
+                lastScorePoints = obj.optInt("lp", 0),
+                lastScorePlayerName = obj.optString("ln").takeIf { it.isNotEmpty() },
+                dealAnimTrigger = obj.optLong("at", 0L)
+            )
+        } catch (e: Exception) {
+            Log.e("OnlineManager", "Failed to parse state JSON: ${e.message}")
+            null
+        }
+    }
+
+    fun messageToJson(msg: OnlineNetworkMessage): String {
+        return JSONObject().apply {
+            put("id", msg.id)
+            put("t", msg.type)
+            put("s", msg.senderId)
+            put("rc", msg.roomCode)
+            put("ci", msg.cardIndex)
+            put("cs", msg.cardSuit)
+            put("cr", msg.cardRank)
+            put("sq", msg.actionSeq)
+            put("sj", msg.stateJson)
+        }.toString()
+    }
+
+    fun jsonToMessage(raw: String): OnlineNetworkMessage? {
+        return try {
+            val obj = JSONObject(raw)
+            val type = if (obj.has("t")) obj.optString("t") else obj.optString("type")
+            val senderId = if (obj.has("s")) obj.optInt("s") else obj.optInt("senderId")
+            val roomCode = if (obj.has("rc")) obj.optString("rc") else obj.optString("roomCode")
+            val cardIndex = if (obj.has("ci")) obj.optInt("ci", -1) else obj.optInt("cardIndex", -1)
+            val cardSuit = if (obj.has("cs")) obj.optString("cs") else obj.optString("cardSuit")
+            val cardRank = if (obj.has("cr")) obj.optString("cr") else obj.optString("cardRank")
+            val actionSeq = if (obj.has("sq")) obj.optLong("sq") else obj.optLong("actionSeq")
+            val stateJson = if (obj.has("sj")) obj.optString("sj") else obj.optString("stateJson")
+            val id = if (obj.has("id")) obj.optString("id") else ""
+
+            OnlineNetworkMessage(
+                id = id,
+                type = type,
+                senderId = senderId,
+                roomCode = roomCode,
+                cardIndex = cardIndex,
+                cardSuit = cardSuit,
+                cardRank = cardRank,
+                actionSeq = actionSeq,
+                stateJson = stateJson
+            )
+        } catch (e: Exception) {
+            null
+        }
+    }
+}
+
 class OnlineManager {
     private val client = OkHttpClient.Builder()
         .readTimeout(0, TimeUnit.MILLISECONDS)
         .connectTimeout(10, TimeUnit.SECONDS)
         .pingInterval(15, TimeUnit.SECONDS)
         .build()
-
-    private val moshi = Moshi.Builder().addLast(KotlinJsonAdapterFactory()).build()
-    private val messageAdapter = moshi.adapter(OnlineNetworkMessage::class.java)
-    private val stateAdapter = moshi.adapter(OnlineGameStateDto::class.java)
 
     private val scope = CoroutineScope(Dispatchers.IO + Job())
 
@@ -218,7 +395,7 @@ class OnlineManager {
         resetLobby()
     }
 
-    private fun topicForRoom(roomCode: String): String = "pisti101_v2_room_$roomCode"
+    private fun topicForRoom(roomCode: String): String = "pisti101_v3_room_$roomCode"
 
     private fun startWebSocket(roomCode: String) {
         try {
@@ -291,32 +468,21 @@ class OnlineManager {
     private fun handleIncomingMessageText(text: String) {
         try {
             var rawMsg = text
-            if (text.contains("\"event\":")) {
-                val mapAdapter = moshi.adapter(Map::class.java)
-                val map = mapAdapter.fromJson(text)
-                val event = map?.get("event") as? String
-                if (event == "open" || event == "keepalive") return
-
-                // Fallback in case ntfy attached a file
-                val attachmentMap = map?.get("attachment") as? Map<*, *>
-                val attachUrl = attachmentMap?.get("url") as? String
-                if (!attachUrl.isNullOrBlank()) {
-                    try {
-                        val dlReq = Request.Builder().url(attachUrl).build()
-                        client.newCall(dlReq).execute().use { dlResp ->
-                            if (dlResp.isSuccessful) {
-                                rawMsg = dlResp.body?.string() ?: ""
-                            }
-                        }
-                    } catch (e: Exception) {
-                        Log.e("OnlineManager", "Attachment download error: ${e.message}")
+            if (text.startsWith("{") && text.contains("\"event\":")) {
+                try {
+                    val rootObj = JSONObject(text)
+                    val event = rootObj.optString("event")
+                    if (event == "open" || event == "keepalive") return
+                    val msgField = rootObj.optString("message")
+                    if (msgField.isNotEmpty()) {
+                        rawMsg = msgField
                     }
-                } else {
-                    rawMsg = map?.get("message") as? String ?: text
+                } catch (e: Exception) {
+                    Log.e("OnlineManager", "ntfy frame unwrap error: ${e.message}")
                 }
             }
 
-            val msg = messageAdapter.fromJson(rawMsg) ?: return
+            val msg = OnlineJsonHelper.jsonToMessage(rawMsg) ?: return
             if (msg.roomCode != activeRoomCode) return
 
             // Deduplication check: drop duplicate network packets (NEVER drop JOIN_ROOM, SYNC_STATE or RESYNC)
@@ -342,7 +508,7 @@ class OnlineManager {
                 }
                 "SYNC_STATE" -> {
                     if (msg.senderId != _myPlayerId.value) {
-                        val newGameState = stateAdapter.fromJson(msg.stateJson)
+                        val newGameState = OnlineJsonHelper.jsonToState(msg.stateJson)
                         if (newGameState != null) {
                             val curVer = _onlineState.value.stateVersion
                             val isCurrentlyStarted = _onlineState.value.isGameStarted
@@ -398,10 +564,10 @@ class OnlineManager {
     }
 
     private fun sendNetworkMessage(msg: OnlineNetworkMessage) {
-        val jsonStr = messageAdapter.toJson(msg).replace("\n", " ").replace("\r", "")
+        val jsonStr = OnlineJsonHelper.messageToJson(msg)
         try {
             val topic = topicForRoom(msg.roomCode)
-            val body = jsonStr.toRequestBody("text/plain".toMediaType())
+            val body = jsonStr.toRequestBody("text/plain; charset=utf-8".toMediaType())
             val req = Request.Builder()
                 .url("https://ntfy.sh/$topic")
                 .post(body)
@@ -863,7 +1029,7 @@ class OnlineManager {
             deck = emptyList(),
             deckSize = if (isHost) hostRemainingDeck.size else state.deckSize
         )
-        val stateJson = stateAdapter.toJson(safeState)
+        val stateJson = OnlineJsonHelper.stateToJson(safeState)
         sendNetworkMessage(
             OnlineNetworkMessage(
                 type = "SYNC_STATE",
