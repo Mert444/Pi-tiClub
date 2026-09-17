@@ -194,7 +194,7 @@ class OnlineManager {
         joinJob = scope.launch(Dispatchers.IO) {
             var attempt = 1
             while (isActive && !_onlineState.value.isGameStarted) {
-                delay(600L)
+                delay(1000L)
                 if (_onlineState.value.isGameStarted) break
                 attempt++
                 _connectionStatus.value = "Suche Freund in Raum $cleanCode... ($attempt)"
@@ -248,7 +248,7 @@ class OnlineManager {
                 } catch (e: Exception) {
                     Log.e("OnlineManager", "Stream error: ${e.message}")
                 }
-                delay(400L)
+                delay(500L)
             }
         }
     }
@@ -259,9 +259,9 @@ class OnlineManager {
             val topic = topicForRoom(roomCode)
             while (isActive) {
                 try {
-                    // Poll with since=all so no initial JOIN_ROOM, SYNC_STATE or game starts are missed due to clock drift or network timing
+                    // Poll recent messages with since=20s to prevent missing packets without overloading or replaying old history
                     val req = Request.Builder()
-                        .url("https://ntfy.sh/$topic/json?poll=1&since=all")
+                        .url("https://ntfy.sh/$topic/json?poll=1&since=20s")
                         .build()
                     client.newCall(req).execute().use { resp ->
                         if (resp.isSuccessful) {
@@ -277,7 +277,7 @@ class OnlineManager {
                 } catch (e: Exception) {
                     Log.e("OnlineManager", "Polling Error: ${e.message}")
                 }
-                delay(600L)
+                delay(1200L)
             }
         }
     }
@@ -313,8 +313,8 @@ class OnlineManager {
             val msg = messageAdapter.fromJson(rawMsg) ?: return
             if (msg.roomCode != activeRoomCode) return
 
-            // Deduplication check: drop duplicate network packets (NEVER drop JOIN_ROOM or RESYNC)
-            if (msg.type != "JOIN_ROOM" && msg.type != "RESYNC" && msg.id.isNotEmpty() && !processedMessageIds.add(msg.id)) {
+            // Deduplication check: drop duplicate network packets (NEVER drop JOIN_ROOM, SYNC_STATE or RESYNC)
+            if (msg.type != "JOIN_ROOM" && msg.type != "SYNC_STATE" && msg.type != "RESYNC" && msg.id.isNotEmpty() && !processedMessageIds.add(msg.id)) {
                 return
             }
 
@@ -340,8 +340,8 @@ class OnlineManager {
                         if (newGameState != null) {
                             val curVer = _onlineState.value.stateVersion
                             val isCurrentlyStarted = _onlineState.value.isGameStarted
-                            // Accept if new version is newer, or if guest has not started the game yet and received a started game
-                            if (newGameState.stateVersion > curVer || (!isCurrentlyStarted && newGameState.isGameStarted)) {
+                            // Accept if new version is newer/equal, or if guest has not started the game yet and received a started game
+                            if (newGameState.stateVersion >= curVer || (!isCurrentlyStarted && newGameState.isGameStarted)) {
                                 _onlineState.value = newGameState
                                 if (newGameState.isGameStarted) {
                                     _isJoining.value = false
