@@ -710,7 +710,7 @@ fun OnlineGameScreen(navController: NavController, gameViewModel: GameViewModel)
                 myPlayerId = myPlayerId,
                 roundNumber = onlineState.roundNumber,
                 targetScore = onlineState.targetScore,
-                deckSize = onlineState.deck.size
+                deckSize = onlineState.deckSize
             )
 
             Spacer(modifier = Modifier.height(10.dp))
@@ -741,7 +741,7 @@ fun OnlineGameScreen(navController: NavController, gameViewModel: GameViewModel)
         }
 
         // --- DRAW DECK STOCK (TOP-LEFT OF CENTER TABLE) ---
-        if (onlineState.deck.isNotEmpty()) {
+        if (onlineState.deckSize > 0) {
             Box(
                 modifier = Modifier
                     .align(Alignment.CenterStart)
@@ -762,7 +762,7 @@ fun OnlineGameScreen(navController: NavController, gameViewModel: GameViewModel)
                         .padding(horizontal = 5.dp, vertical = 2.dp)
                 ) {
                     Text(
-                        text = "${onlineState.deck.size}",
+                        text = "${onlineState.deckSize}",
                         color = OnPrimaryYellow,
                         fontSize = 10.sp,
                         fontWeight = FontWeight.ExtraBold

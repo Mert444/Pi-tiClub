@@ -49,6 +49,7 @@ data class OnlineGameStateDto(
     val guestName: String? = null,
     val centerPile: List<OnlineCardDto> = emptyList(),
     val deck: List<OnlineCardDto> = emptyList(),
+    val deckSize: Int = 0,
     val players: List<OnlinePlayerDto> = emptyList(),
     val currentTurnIndex: Int = 0, // 0 = Host, 1 = Guest
     val starterPlayerIndex: Int = 0,
@@ -112,6 +113,7 @@ class OnlineManager {
     private var myName = "Spieler"
     private var currentVersion: Long = 0L
     private var guestActionSeq: Long = 0L
+    private var hostRemainingDeck: List<OnlineCardDto> = emptyList()
 
     private var joinJob: Job? = null
 
@@ -179,17 +181,19 @@ class OnlineManager {
 
         joinJob?.cancel()
         joinJob = scope.launch(Dispatchers.IO) {
-            val joinMsg = OnlineNetworkMessage(
-                type = "JOIN_ROOM",
-                senderId = 1,
-                roomCode = cleanCode,
-                stateJson = guestName
-            )
             var attempt = 0
             while (isActive && !_onlineState.value.isGameStarted) {
                 attempt++
                 _connectionStatus.value = "Suche Freund in Raum $cleanCode... ($attempt)"
-                sendNetworkMessage(joinMsg)
+                sendNetworkMessage(
+                    OnlineNetworkMessage(
+                        id = java.util.UUID.randomUUID().toString(),
+                        type = "JOIN_ROOM",
+                        senderId = 1,
+                        roomCode = cleanCode,
+                        stateJson = guestName
+                    )
+                )
                 delay(1000L)
             }
         }
@@ -209,11 +213,11 @@ class OnlineManager {
             while (isActive) {
                 try {
                     val req = Request.Builder()
-                        .url("https://ntfy.sh/pisti_room_$roomCode/raw")
+                        .url("https://ntfy.sh/pisti_room_$roomCode/json")
                         .build()
                     client.newCall(req).execute().use { response ->
                         if (response.isSuccessful) {
-                            _connectionStatus.value = "Online Verbunden"
+                            _connectionStatus.value = if (isHost) "Raum $roomCode aktiv – Warte auf Mitspieler" else "Verbinde mit Raum $roomCode..."
                             val source = response.body?.source() ?: return@use
                             while (!source.exhausted() && isActive) {
                                 val line = source.readUtf8Line() ?: break
@@ -237,9 +241,9 @@ class OnlineManager {
         pollJob = scope.launch(Dispatchers.IO) {
             while (isActive) {
                 try {
-                    // Only poll last 3 seconds to avoid retrieving stale history
+                    // Poll recent messages with generous window (30s) so latency or clock drift doesn't drop messages
                     val req = Request.Builder()
-                        .url("https://ntfy.sh/pisti_room_$roomCode/json?poll=1&since=3s")
+                        .url("https://ntfy.sh/pisti_room_$roomCode/json?poll=1&since=30s")
                         .build()
                     client.newCall(req).execute().use { resp ->
                         if (resp.isSuccessful) {
@@ -255,7 +259,7 @@ class OnlineManager {
                 } catch (e: Exception) {
                     Log.e("OnlineManager", "Polling Error: ${e.message}")
                 }
-                delay(1500L)
+                delay(1200L)
             }
         }
     }
@@ -268,14 +272,31 @@ class OnlineManager {
                 val map = mapAdapter.fromJson(text)
                 val event = map?.get("event") as? String
                 if (event == "open" || event == "keepalive") return
-                rawMsg = map?.get("message") as? String ?: text
+
+                // Fallback in case ntfy attached a file
+                val attachmentMap = map?.get("attachment") as? Map<*, *>
+                val attachUrl = attachmentMap?.get("url") as? String
+                if (!attachUrl.isNullOrBlank()) {
+                    try {
+                        val dlReq = Request.Builder().url(attachUrl).build()
+                        client.newCall(dlReq).execute().use { dlResp ->
+                            if (dlResp.isSuccessful) {
+                                rawMsg = dlResp.body?.string() ?: ""
+                            }
+                        }
+                    } catch (e: Exception) {
+                        Log.e("OnlineManager", "Attachment download error: ${e.message}")
+                    }
+                } else {
+                    rawMsg = map?.get("message") as? String ?: text
+                }
             }
 
             val msg = messageAdapter.fromJson(rawMsg) ?: return
             if (msg.roomCode != activeRoomCode) return
 
-            // Deduplication check: drop duplicate network packets
-            if (msg.id.isNotEmpty() && !processedMessageIds.add(msg.id)) {
+            // Deduplication check: drop duplicate network packets (NEVER drop JOIN_ROOM or RESYNC)
+            if (msg.type != "JOIN_ROOM" && msg.type != "RESYNC" && msg.id.isNotEmpty() && !processedMessageIds.add(msg.id)) {
                 return
             }
 
@@ -286,7 +307,12 @@ class OnlineManager {
                         if (!_onlineState.value.isGameStarted) {
                             startNewOnlineGame(guestName)
                         } else {
+                            // Host already started game! Resend current game state immediately
                             broadcastState(_onlineState.value)
+                            scope.launch {
+                                delay(200)
+                                broadcastState(_onlineState.value)
+                            }
                         }
                     }
                 }
@@ -407,7 +433,7 @@ class OnlineManager {
         // Deal 4 to host (0) and 4 to guest (1)
         val hostHand = remainingAfterCenter.take(4)
         val guestHand = remainingAfterCenter.drop(4).take(4)
-        val remainingDeck = remainingAfterCenter.drop(8) // 40 cards left in draw stock
+        hostRemainingDeck = remainingAfterCenter.drop(8) // 40 cards kept on host!
 
         currentVersion = 1L
 
@@ -420,7 +446,8 @@ class OnlineManager {
             hostName = myName,
             guestName = guestName,
             centerPile = center,
-            deck = remainingDeck,
+            deck = emptyList(), // Keep network payload tiny (<1.5 KB)
+            deckSize = hostRemainingDeck.size,
             players = listOf(hostPlayer, guestPlayer),
             currentTurnIndex = 0,
             starterPlayerIndex = 0,
@@ -441,6 +468,8 @@ class OnlineManager {
         broadcastState(newState)
         scope.launch {
             delay(150)
+            broadcastState(newState)
+            delay(350)
             broadcastState(newState)
         }
     }
@@ -516,14 +545,13 @@ class OnlineManager {
 
         // Check if both hands are empty
         val allHandsEmpty = updatedPlayers.all { it.hand.isEmpty() }
-        var finalDeck = currentState.deck
         var finalPlayers = updatedPlayers
         var dealTriggered = false
 
-        if (allHandsEmpty && finalDeck.isNotEmpty()) {
-            val p0Hand = finalDeck.take(4)
-            val p1Hand = finalDeck.drop(4).take(4)
-            finalDeck = finalDeck.drop(8)
+        if (allHandsEmpty && hostRemainingDeck.isNotEmpty()) {
+            val p0Hand = hostRemainingDeck.take(4)
+            val p1Hand = hostRemainingDeck.drop(4).take(4)
+            hostRemainingDeck = hostRemainingDeck.drop(8)
 
             finalPlayers = updatedPlayers.map {
                 when (it.id) {
@@ -535,7 +563,7 @@ class OnlineManager {
             dealTriggered = true
         }
 
-        val isRoundOver = allHandsEmpty && finalDeck.isEmpty()
+        val isRoundOver = allHandsEmpty && hostRemainingDeck.isEmpty()
 
         currentVersion++
 
@@ -611,6 +639,7 @@ class OnlineManager {
             val finalState = currentState.copy(
                 stateVersion = currentVersion,
                 deck = emptyList(),
+                deckSize = 0,
                 centerPile = newCenterPile,
                 players = ratedPlayers,
                 currentTurnIndex = 0,
@@ -639,7 +668,8 @@ class OnlineManager {
 
             val updatedState = currentState.copy(
                 stateVersion = currentVersion,
-                deck = finalDeck,
+                deck = emptyList(),
+                deckSize = hostRemainingDeck.size,
                 centerPile = newCenterPile,
                 players = finalPlayers,
                 currentTurnIndex = nextTurn,
@@ -671,7 +701,7 @@ class OnlineManager {
 
         val hostHand = remainingAfterCenter.take(4)
         val guestHand = remainingAfterCenter.drop(4).take(4)
-        val remainingDeck = remainingAfterCenter.drop(8)
+        hostRemainingDeck = remainingAfterCenter.drop(8)
 
         val nextStarter = (currentState.starterPlayerIndex + 1) % 2
         val resetPlayers = currentState.players.map { p ->
@@ -686,7 +716,8 @@ class OnlineManager {
         val newState = currentState.copy(
             stateVersion = currentVersion,
             centerPile = center,
-            deck = remainingDeck,
+            deck = emptyList(),
+            deckSize = hostRemainingDeck.size,
             players = resetPlayers,
             currentTurnIndex = nextStarter,
             starterPlayerIndex = nextStarter,
@@ -708,7 +739,11 @@ class OnlineManager {
     }
 
     private fun broadcastState(state: OnlineGameStateDto) {
-        val stateJson = stateAdapter.toJson(state)
+        val safeState = state.copy(
+            deck = emptyList(),
+            deckSize = if (isHost) hostRemainingDeck.size else state.deckSize
+        )
+        val stateJson = stateAdapter.toJson(safeState)
         sendNetworkMessage(
             OnlineNetworkMessage(
                 type = "SYNC_STATE",
@@ -754,6 +789,8 @@ class OnlineManager {
         pollJob = null
         activeRoomCode = ""
         isHost = false
+        hostRemainingDeck = emptyList()
+        processedMessageIds.clear()
         _onlineState.value = OnlineGameStateDto()
         _connectionStatus.value = "Bereit"
     }
