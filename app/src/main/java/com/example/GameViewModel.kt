@@ -52,6 +52,8 @@ data class GameState(
     val matchWinnerName: String? = null,
     val statusMessage: String = "DU BIST AM ZUG",
     val playerName: String = "Spieler",
+    val hasSetNickname: Boolean = false,
+    val showInitialNicknameDialog: Boolean = false,
     val playerCoins: Int = 630,
     val soundEnabled: Boolean = true,
     val showRulesDialog: Boolean = false,
@@ -74,6 +76,8 @@ class GameViewModel : ViewModel() {
     val state: StateFlow<GameState> = _state
     private var timerJob: kotlinx.coroutines.Job? = null
     private var globalMatchStarterIndex = 0
+
+    val onlineManager = OnlineManager()
 
     init {
         startNewMatch()
@@ -127,13 +131,32 @@ class GameViewModel : ViewModel() {
         _state.update { it.copy(soundEnabled = !it.soundEnabled) }
     }
 
+    fun toggleInitialNicknameDialog(show: Boolean) {
+        _state.update { it.copy(showInitialNicknameDialog = show) }
+    }
+
+    fun confirmInitialNickname(newName: String) {
+        val finalName = if (newName.isNotBlank()) newName.trim() else "Spieler"
+        _state.update { currentState ->
+            val updatedPlayers = currentState.players.map {
+                if (it.id == 0) it.copy(name = finalName) else it
+            }
+            currentState.copy(
+                playerName = finalName,
+                players = updatedPlayers,
+                hasSetNickname = true,
+                showInitialNicknameDialog = false
+            )
+        }
+    }
+
     fun updatePlayerName(newName: String) {
         if (newName.isNotBlank()) {
             _state.update { currentState ->
                 val updatedPlayers = currentState.players.map {
                     if (it.id == 0) it.copy(name = newName) else it
                 }
-                currentState.copy(playerName = newName, players = updatedPlayers)
+                currentState.copy(playerName = newName, players = updatedPlayers, hasSetNickname = true)
             }
         }
     }
@@ -455,61 +478,27 @@ class GameViewModel : ViewModel() {
                 p.copy(totalScore = p.totalScore + p.roundScore)
             }
 
-            // Check if any player hit or exceeded targetScore (501 points)
+            // Check if any player hit or exceeded targetScore (101 points)
             val highestTotalScore = finalPlayers.maxOf { it.totalScore }
             val matchOver = highestTotalScore >= currentState.targetScore
             val winner = if (matchOver) finalPlayers.maxByOrNull { it.totalScore }?.name else null
 
-            if (matchOver) {
-                _state.update {
-                    it.copy(
-                        deck = emptyList(),
-                        centerPile = emptyList(),
-                        players = finalPlayers,
-                        currentTurnIndex = 0,
-                        lastCaptorIndex = newLastCaptor,
-                        isMatchOver = true,
-                        matchWinnerName = winner,
-                        showRoundEndSummary = true,
-                        statusMessage = "MATCH BEENDET! GEWINNER: $winner",
-                        lastPistiMessage = pistiNotice,
-                        lastScoreEvent = scoreAnimEvent ?: it.lastScoreEvent,
-                        gamesPlayed = it.gamesPlayed + 1,
-                        gamesWon = if (winner == finalPlayers[0].name) it.gamesWon + 1 else it.gamesWon
-                    )
-                }
-            } else {
-                // Continue game automatically: deal next deck without blocking dialog
-                val nextRoundNum = currentState.roundNumber + 1
-                val (newResetPlayers, newCenter, newRemaining) = dealNewRoundDeck(finalPlayers)
-
-                val startingPlayerIndex = (currentState.starterPlayerIndex + 1) % 4
-                val starterName = newResetPlayers[startingPlayerIndex].name
-                val statusMsg = if (startingPlayerIndex == 0) "KARTEN NEU GEMISCHT - DU FÄNGST AN!" else "NEU GEMISCHT - $starterName fängt an..."
-
-                _state.update {
-                    it.copy(
-                        deck = newRemaining,
-                        centerPile = newCenter,
-                        players = newResetPlayers,
-                        currentTurnIndex = startingPlayerIndex,
-                        starterPlayerIndex = startingPlayerIndex,
-                        lastCaptorIndex = -1,
-                        roundNumber = nextRoundNum,
-                        showRoundEndSummary = false,
-                        statusMessage = statusMsg,
-                        lastPistiMessage = pistiNotice,
-                        lastScoreEvent = scoreAnimEvent ?: it.lastScoreEvent,
-                        dealAnimTrigger = System.currentTimeMillis()
-                    )
-                }
-
-                if (startingPlayerIndex != 0) {
-                    viewModelScope.launch {
-                        delay(900)
-                        executeBotTurn(startingPlayerIndex)
-                    }
-                }
+            _state.update {
+                it.copy(
+                    deck = emptyList(),
+                    centerPile = emptyList(),
+                    players = finalPlayers,
+                    currentTurnIndex = 0,
+                    lastCaptorIndex = newLastCaptor,
+                    isMatchOver = matchOver,
+                    matchWinnerName = winner,
+                    showRoundEndSummary = true,
+                    statusMessage = if (matchOver) "MATCH BEENDET! GEWINNER: $winner" else "RUNDE ${it.roundNumber} BEENDET!",
+                    lastPistiMessage = pistiNotice,
+                    lastScoreEvent = scoreAnimEvent ?: it.lastScoreEvent,
+                    gamesPlayed = if (matchOver) it.gamesPlayed + 1 else it.gamesPlayed,
+                    gamesWon = if (matchOver && winner == finalPlayers[0].name) it.gamesWon + 1 else it.gamesWon
+                )
             }
         } else {
             val nextPlayerName = finalPlayers[nextTurn].name

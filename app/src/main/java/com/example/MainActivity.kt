@@ -63,6 +63,8 @@ fun AppNavigation(modifier: Modifier = Modifier) {
   NavHost(navController = navController, startDestination = "menu", modifier = modifier.background(MenuTeal).fillMaxSize()) {
     composable("menu") { MenuScreen(navController, gameViewModel) }
     composable("game") { GameScreen(navController, gameViewModel) }
+    composable("online_lobby") { OnlineLobbyScreen(navController, gameViewModel) }
+    composable("online_game") { OnlineGameScreen(navController, gameViewModel) }
   }
 
   if (state.showSettingsDialog) {
@@ -92,10 +94,24 @@ fun AppNavigation(modifier: Modifier = Modifier) {
   if (state.showRoundEndSummary) {
     RoundEndSummaryDialog(viewModel = gameViewModel)
   }
+
+  if (state.showInitialNicknameDialog) {
+    InitialNicknameDialog(
+      viewModel = gameViewModel,
+      onConfirm = { nickname ->
+        gameViewModel.confirmInitialNickname(nickname)
+        gameViewModel.startNewGame()
+        navController.navigate("game")
+      },
+      onDismiss = { gameViewModel.toggleInitialNicknameDialog(false) }
+    )
+  }
 }
 
 @Composable
 fun MenuScreen(navController: NavController, gameViewModel: GameViewModel) {
+  val state by gameViewModel.state.collectAsState()
+
   Box(
     modifier = Modifier
       .fillMaxSize()
@@ -110,7 +126,7 @@ fun MenuScreen(navController: NavController, gameViewModel: GameViewModel) {
       horizontalAlignment = Alignment.CenterHorizontally,
       verticalArrangement = Arrangement.Center
     ) {
-      // 1. Spielen (Starts game directly on hard bot mode)
+      // 1. Spielen (Starts game directly or prompts for initial nickname once)
       Text(
         text = "Spielen",
         color = Color.White,
@@ -119,10 +135,34 @@ fun MenuScreen(navController: NavController, gameViewModel: GameViewModel) {
         textAlign = TextAlign.Center,
         modifier = Modifier
           .clickable {
-            gameViewModel.startNewGame()
-            navController.navigate("game")
+            if (!state.hasSetNickname) {
+              gameViewModel.toggleInitialNicknameDialog(true)
+            } else {
+              gameViewModel.startNewGame()
+              navController.navigate("game")
+            }
           }
-          .padding(vertical = 10.dp)
+          .padding(vertical = 8.dp)
+      )
+
+      Spacer(modifier = Modifier.height(10.dp))
+
+      // 1b. Online (2 Spieler mit Freunden)
+      Text(
+        text = "Online (2 Spieler)",
+        color = PrimaryYellow,
+        fontSize = 40.sp,
+        fontFamily = FontFamily.Cursive,
+        textAlign = TextAlign.Center,
+        modifier = Modifier
+          .clickable {
+            if (!state.hasSetNickname) {
+              gameViewModel.toggleInitialNicknameDialog(true)
+            } else {
+              navController.navigate("online_lobby")
+            }
+          }
+          .padding(vertical = 8.dp)
       )
 
       Spacer(modifier = Modifier.height(14.dp))
@@ -1581,6 +1621,54 @@ fun RoundEndSummaryDialog(viewModel: GameViewModel) {
         colors = ButtonDefaults.buttonColors(containerColor = PrimaryYellow, contentColor = OnPrimaryYellow)
       ) {
         Text(if (state.isMatchOver) "Neues Match starten" else "Nächste Runde starten")
+      }
+    },
+    containerColor = BackgroundGreen
+  )
+}
+
+@Composable
+fun InitialNicknameDialog(viewModel: GameViewModel, onConfirm: (String) -> Unit, onDismiss: () -> Unit) {
+  val state by viewModel.state.collectAsState()
+  var tempName by remember { mutableStateOf(state.playerName) }
+
+  AlertDialog(
+    onDismissRequest = { onDismiss() },
+    title = {
+      Row(verticalAlignment = Alignment.CenterVertically) {
+        Icon(Icons.Default.Person, contentDescription = null, tint = PrimaryYellow)
+        Spacer(modifier = Modifier.width(8.dp))
+        Text("Willkommen!", color = PrimaryYellow, fontWeight = FontWeight.Bold, fontSize = 20.sp)
+      }
+    },
+    text = {
+      Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        Text(
+          "Gib deinen Nickname ein, um das Spiel zu starten. Du kannst ihn später jederzeit in den Einstellungen ändern.",
+          color = Color.White,
+          fontSize = 13.sp
+        )
+        OutlinedTextField(
+          value = tempName,
+          onValueChange = { tempName = it },
+          label = { Text("Dein Nickname", color = OutlineYellow) },
+          singleLine = true,
+          colors = OutlinedTextFieldDefaults.colors(
+            focusedBorderColor = PrimaryYellow,
+            unfocusedBorderColor = OutlineYellow,
+            focusedTextColor = Color.White,
+            unfocusedTextColor = Color.White
+          ),
+          modifier = Modifier.fillMaxWidth()
+        )
+      }
+    },
+    confirmButton = {
+      Button(
+        onClick = { onConfirm(tempName) },
+        colors = ButtonDefaults.buttonColors(containerColor = PrimaryYellow, contentColor = OnPrimaryYellow)
+      ) {
+        Text("Speichern & Spiel starten", fontWeight = FontWeight.Bold)
       }
     },
     containerColor = BackgroundGreen
