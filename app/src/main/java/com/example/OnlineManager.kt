@@ -172,11 +172,24 @@ class OnlineManager {
 
             override fun onFailure(ws: WebSocket, t: Throwable, response: Response?) {
                 Log.e("OnlineManager", "WebSocket Fehler: ${t.message}")
-                _connectionStatus.value = "Fallback Active"
+                _connectionStatus.value = "Verbindung wird erneuert..."
+                // Automatically reconnect after 1.5s
+                scope.launch {
+                    delay(1500)
+                    if (activeRoomCode == roomCode) {
+                        connectWebSocket(roomCode)
+                    }
+                }
             }
 
             override fun onClosed(ws: WebSocket, code: Int, reason: String) {
                 Log.d("OnlineManager", "WebSocket Geschlossen: $reason")
+                if (code != 1000 && activeRoomCode == roomCode) {
+                    scope.launch {
+                        delay(1500)
+                        connectWebSocket(roomCode)
+                    }
+                }
             }
         })
     }
@@ -186,15 +199,17 @@ class OnlineManager {
         pollJob = scope.launch {
             while (isActive) {
                 try {
+                    // poll=1 returns immediately with any recent messages, without holding the connection open
                     val req = Request.Builder()
-                        .url("https://ntfy.sh/pisti_room_$roomCode/json?since=10s")
+                        .url("https://ntfy.sh/pisti_room_$roomCode/json?poll=1&since=10s")
                         .build()
                     client.newCall(req).execute().use { resp ->
                         if (resp.isSuccessful) {
                             val bodyText = resp.body?.string() ?: ""
                             bodyText.lineSequence().forEach { line ->
-                                if (line.isNotBlank()) {
-                                    handleIncomingMessageText(line)
+                                val trimmed = line.trim()
+                                if (trimmed.isNotEmpty()) {
+                                    handleIncomingMessageText(trimmed)
                                 }
                             }
                         }
@@ -202,7 +217,7 @@ class OnlineManager {
                 } catch (e: Exception) {
                     Log.e("OnlineManager", "Polling Error: ${e.message}")
                 }
-                delay(1200L) // Lightweight 1.2s fallback check
+                delay(800L) // 800ms non-blocking redundant sync
             }
         }
     }
@@ -210,7 +225,7 @@ class OnlineManager {
     private fun handleIncomingMessageText(text: String) {
         try {
             var rawMsg = text
-            if (text.contains("\"message\":")) {
+            if (text.contains("\"event\":")) {
                 val mapAdapter = moshi.adapter(Map::class.java)
                 val map = mapAdapter.fromJson(text)
                 val event = map?.get("event") as? String
@@ -227,14 +242,19 @@ class OnlineManager {
                         val guestName = if (msg.stateJson.isNotBlank()) msg.stateJson else "Freund"
                         if (!_onlineState.value.isGameStarted) {
                             startNewOnlineGame(guestName)
+                        } else {
+                            // If game is already running, re-broadcast current state so guest catches up instantly!
+                            broadcastState(_onlineState.value)
                         }
                     }
                 }
                 "SYNC_STATE" -> {
                     if (msg.senderId != _myPlayerId.value) {
                         val newGameState = stateAdapter.fromJson(msg.stateJson)
-                        if (newGameState != null && newGameState.stateVersion > _onlineState.value.stateVersion) {
-                            _onlineState.value = newGameState
+                        if (newGameState != null) {
+                            if (!isHost || newGameState.stateVersion > _onlineState.value.stateVersion) {
+                                _onlineState.value = newGameState
+                            }
                         }
                     }
                 }
@@ -264,10 +284,7 @@ class OnlineManager {
     private fun sendNetworkMessage(msg: OnlineNetworkMessage) {
         val jsonStr = messageAdapter.toJson(msg)
         try {
-            // Try sending over WebSocket if open
-            webSocket?.send(jsonStr)
-
-            // Publish asynchronously via HTTP POST so UI thread and coroutine never block
+            // Note: ntfy WS is receive-only. We publish via HTTP POST which instantly broadcasts to WS & HTTP subscribers!
             val body = jsonStr.toRequestBody("text/plain".toMediaType())
             val req = Request.Builder()
                 .url("https://ntfy.sh/pisti_room_${msg.roomCode}")
@@ -280,6 +297,9 @@ class OnlineManager {
                 }
 
                 override fun onResponse(call: Call, response: Response) {
+                    if (!response.isSuccessful) {
+                        Log.e("OnlineManager", "POST returned HTTP ${response.code}")
+                    }
                     response.close()
                 }
             })
@@ -389,10 +409,9 @@ class OnlineManager {
         }
 
         val hostName = currentState.hostName
-        currentVersion++
 
         val optimisticState = currentState.copy(
-            stateVersion = currentVersion,
+            stateVersion = currentState.stateVersion,
             deck = finalDeck,
             centerPile = newCenterPile,
             players = finalPlayers,
