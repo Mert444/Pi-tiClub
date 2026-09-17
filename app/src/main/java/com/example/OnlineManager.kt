@@ -80,7 +80,7 @@ class OnlineManager {
 
     private val scope = CoroutineScope(Dispatchers.IO + Job())
 
-    private var webSocket: WebSocket? = null
+    private var streamJob: Job? = null
     private var pollJob: Job? = null
 
     private val _onlineState = MutableStateFlow(OnlineGameStateDto())
@@ -92,12 +92,18 @@ class OnlineManager {
     private val _connectionStatus = MutableStateFlow("Bereit")
     val connectionStatus: StateFlow<String> = _connectionStatus.asStateFlow()
 
+    private val _isJoining = MutableStateFlow(false)
+    val isJoining: StateFlow<Boolean> = _isJoining.asStateFlow()
+
     private var isHost = false
     private var activeRoomCode = ""
     private var myName = "Spieler"
     private var currentVersion: Long = 0L
 
+    private var joinJob: Job? = null
+
     fun createRoom(hostName: String): String {
+        resetLobby()
         val code = (1000..9999).random().toString()
         activeRoomCode = code
         isHost = true
@@ -114,17 +120,17 @@ class OnlineManager {
             )
         )
         _onlineState.value = initialState
-        _connectionStatus.value = "Raum $code erstellt"
+        _connectionStatus.value = "Raum $code aktiv – Warte auf Mitspieler"
 
-        connectWebSocket(code)
-        startHttpPolling(code)
+        startRawStream(code)
+        startSafetyPoller(code)
         return code
     }
 
     fun joinRoom(code: String, guestName: String, onResult: (Boolean, String) -> Unit) {
-        val cleanCode = code.trim()
+        val cleanCode = code.trim().filter { it.isDigit() }
         if (cleanCode.length != 4) {
-            onResult(false, "Bitte 4-stellige Raumnummer eingeben")
+            onResult(false, "Bitte 4-stellige Raumnummer eingeben (z.B. 4829)")
             return
         }
 
@@ -132,76 +138,85 @@ class OnlineManager {
         isHost = false
         myName = guestName
         _myPlayerId.value = 1
+        _isJoining.value = true
 
         _connectionStatus.value = "Verbinde mit Raum $cleanCode..."
+        _onlineState.value = OnlineGameStateDto(
+            roomCode = cleanCode,
+            hostName = "Warte auf Host...",
+            statusMessage = "VERBINDE MIT RAUM $cleanCode...",
+            players = listOf(
+                OnlinePlayerDto(0, "Host (Freund)"),
+                OnlinePlayerDto(1, guestName)
+            ),
+            isGameStarted = false
+        )
 
-        connectWebSocket(cleanCode)
-        startHttpPolling(cleanCode)
+        startRawStream(cleanCode)
+        startSafetyPoller(cleanCode)
 
-        // Send JOIN message instantly and repeat to guarantee instant pairing
-        scope.launch {
+        joinJob?.cancel()
+        joinJob = scope.launch(Dispatchers.IO) {
             val joinMsg = OnlineNetworkMessage(
                 type = "JOIN_ROOM",
                 senderId = 1,
                 roomCode = cleanCode,
                 stateJson = guestName
             )
-            repeat(4) {
+            var attempt = 0
+            while (isActive && !_onlineState.value.isGameStarted) {
+                attempt++
+                _connectionStatus.value = "Suche Freund in Raum $cleanCode... ($attempt)"
                 sendNetworkMessage(joinMsg)
-                delay(200)
+                delay(1000L)
             }
         }
-        onResult(true, "Verbindung zum Raum wird aufgebaut...")
+        onResult(true, "Verbindungsanfrage an Raum $cleanCode gesendet!")
     }
 
-    private fun connectWebSocket(roomCode: String) {
-        webSocket?.close(1000, "Neuer Raum")
-        val request = Request.Builder()
-            .url("https://ntfy.sh/pisti_room_$roomCode/ws?since=1m")
-            .build()
-
-        webSocket = client.newWebSocket(request, object : WebSocketListener() {
-            override fun onOpen(ws: WebSocket, response: Response) {
-                Log.d("OnlineManager", "WebSocket Verbunden: $roomCode")
-                _connectionStatus.value = "Online Verbunden"
-            }
-
-            override fun onMessage(ws: WebSocket, text: String) {
-                handleIncomingMessageText(text)
-            }
-
-            override fun onFailure(ws: WebSocket, t: Throwable, response: Response?) {
-                Log.e("OnlineManager", "WebSocket Fehler: ${t.message}")
-                _connectionStatus.value = "Verbindung wird erneuert..."
-                // Automatically reconnect after 1.5s
-                scope.launch {
-                    delay(1500)
-                    if (activeRoomCode == roomCode) {
-                        connectWebSocket(roomCode)
-                    }
-                }
-            }
-
-            override fun onClosed(ws: WebSocket, code: Int, reason: String) {
-                Log.d("OnlineManager", "WebSocket Geschlossen: $reason")
-                if (code != 1000 && activeRoomCode == roomCode) {
-                    scope.launch {
-                        delay(1500)
-                        connectWebSocket(roomCode)
-                    }
-                }
-            }
-        })
+    fun cancelJoin() {
+        joinJob?.cancel()
+        joinJob = null
+        _isJoining.value = false
+        resetLobby()
     }
 
-    private fun startHttpPolling(roomCode: String) {
-        pollJob?.cancel()
-        pollJob = scope.launch {
+    private fun startRawStream(roomCode: String) {
+        streamJob?.cancel()
+        streamJob = scope.launch(Dispatchers.IO) {
             while (isActive) {
                 try {
-                    // poll=1 returns immediately with any recent messages, without holding the connection open
                     val req = Request.Builder()
-                        .url("https://ntfy.sh/pisti_room_$roomCode/json?poll=1&since=10s")
+                        .url("https://ntfy.sh/pisti_room_$roomCode/raw")
+                        .build()
+                    client.newCall(req).execute().use { response ->
+                        if (response.isSuccessful) {
+                            _connectionStatus.value = "Online Verbunden"
+                            val source = response.body?.source() ?: return@use
+                            while (!source.exhausted() && isActive) {
+                                val line = source.readUtf8Line() ?: break
+                                val trimmed = line.trim()
+                                if (trimmed.isNotEmpty()) {
+                                    handleIncomingMessageText(trimmed)
+                                }
+                            }
+                        }
+                    }
+                } catch (e: Exception) {
+                    Log.e("OnlineManager", "Stream error: ${e.message}")
+                }
+                delay(1000L) // Reconnect after 1 second if closed
+            }
+        }
+    }
+
+    private fun startSafetyPoller(roomCode: String) {
+        pollJob?.cancel()
+        pollJob = scope.launch(Dispatchers.IO) {
+            while (isActive) {
+                try {
+                    val req = Request.Builder()
+                        .url("https://ntfy.sh/pisti_room_$roomCode/json?poll=1&since=8s")
                         .build()
                     client.newCall(req).execute().use { resp ->
                         if (resp.isSuccessful) {
@@ -217,7 +232,7 @@ class OnlineManager {
                 } catch (e: Exception) {
                     Log.e("OnlineManager", "Polling Error: ${e.message}")
                 }
-                delay(800L) // 800ms non-blocking redundant sync
+                delay(1000L) // Non-blocking 1.0s redundant sync
             }
         }
     }
@@ -243,7 +258,7 @@ class OnlineManager {
                         if (!_onlineState.value.isGameStarted) {
                             startNewOnlineGame(guestName)
                         } else {
-                            // If game is already running, re-broadcast current state so guest catches up instantly!
+                            // Re-broadcast state so guest connects immediately
                             broadcastState(_onlineState.value)
                         }
                     }
@@ -254,6 +269,12 @@ class OnlineManager {
                         if (newGameState != null) {
                             if (!isHost || newGameState.stateVersion > _onlineState.value.stateVersion) {
                                 _onlineState.value = newGameState
+                                if (newGameState.isGameStarted) {
+                                    _isJoining.value = false
+                                    joinJob?.cancel()
+                                    joinJob = null
+                                    _connectionStatus.value = "Verbunden – Spiel läuft!"
+                                }
                             }
                         }
                     }
@@ -282,9 +303,8 @@ class OnlineManager {
     }
 
     private fun sendNetworkMessage(msg: OnlineNetworkMessage) {
-        val jsonStr = messageAdapter.toJson(msg)
+        val jsonStr = messageAdapter.toJson(msg).replace("\n", " ").replace("\r", "")
         try {
-            // Note: ntfy WS is receive-only. We publish via HTTP POST which instantly broadcasts to WS & HTTP subscribers!
             val body = jsonStr.toRequestBody("text/plain".toMediaType())
             val req = Request.Builder()
                 .url("https://ntfy.sh/pisti_room_${msg.roomCode}")
@@ -318,7 +338,7 @@ class OnlineManager {
         if (isHost) {
             processOnlineCardPlay(0, cardIndex)
         } else {
-            // Apply optimistic card play locally on Guest device so UI updates instantly (0ms lag!)
+            // Apply optimistic card play locally on Guest device so UI updates with 0ms lag
             optimisticGuestCardPlay(cardIndex)
 
             val playMsg = OnlineNetworkMessage(
@@ -328,9 +348,9 @@ class OnlineManager {
                 cardIndex = cardIndex
             )
             sendNetworkMessage(playMsg)
-            // Burst send to ensure zero loss
+            // Burst send to ensure delivery
             scope.launch {
-                delay(100)
+                delay(120)
                 sendNetworkMessage(playMsg)
             }
         }
@@ -388,37 +408,15 @@ class OnlineManager {
             if (it.id == 1) updatedGuest else it
         }
 
-        val allHandsEmpty = updatedPlayers.all { it.hand.isEmpty() }
-        var finalDeck = currentState.deck
-        var finalPlayers = updatedPlayers
-        var dealTriggered = false
-
-        if (allHandsEmpty && finalDeck.isNotEmpty()) {
-            val p0Hand = finalDeck.take(4)
-            val p1Hand = finalDeck.drop(4).take(4)
-            finalDeck = finalDeck.drop(8)
-
-            finalPlayers = updatedPlayers.map {
-                when (it.id) {
-                    0 -> it.copy(hand = p0Hand)
-                    1 -> it.copy(hand = p1Hand)
-                    else -> it
-                }
-            }
-            dealTriggered = true
-        }
-
         val hostName = currentState.hostName
 
         val optimisticState = currentState.copy(
             stateVersion = currentState.stateVersion,
-            deck = finalDeck,
             centerPile = newCenterPile,
-            players = finalPlayers,
+            players = updatedPlayers,
             currentTurnIndex = 0, // Now Host turn
-            statusMessage = if (dealTriggered) "NEUE HANDKARTEN! $hostName IST AM ZUG" else "$hostName IST AM ZUG",
-            lastPistiMessage = pistiNotice,
-            dealAnimTrigger = if (dealTriggered) System.currentTimeMillis() else 0L
+            statusMessage = "$hostName IST AM ZUG...",
+            lastPistiMessage = pistiNotice
         )
 
         _onlineState.value = optimisticState
@@ -426,16 +424,22 @@ class OnlineManager {
 
     private fun startNewOnlineGame(guestName: String) {
         val fullDeck = createShuffledDeck()
+
+        // 4 center cards (3 face-down, 1 face-up on top)
         val center = fullDeck.take(4).mapIndexed { idx, card ->
-            card.copy(isFaceUp = idx == 3) // Only 4th card face up
+            card.copy(isFaceUp = idx == 3)
         }
         val remainingAfterCenter = fullDeck.drop(4)
 
+        // Deal 4 to host (0) and 4 to guest (1)
         val hostHand = remainingAfterCenter.take(4)
         val guestHand = remainingAfterCenter.drop(4).take(4)
-        val remainingDeck = remainingAfterCenter.drop(8)
+        val remainingDeck = remainingAfterCenter.drop(8) // 40 cards left in draw stock
 
         currentVersion = 1L
+
+        val hostPlayer = OnlinePlayerDto(0, myName, hostHand, 0, 0, 0)
+        val guestPlayer = OnlinePlayerDto(1, guestName, guestHand, 0, 0, 0)
 
         val newState = OnlineGameStateDto(
             stateVersion = currentVersion,
@@ -444,21 +448,29 @@ class OnlineManager {
             guestName = guestName,
             centerPile = center,
             deck = remainingDeck,
-            players = listOf(
-                OnlinePlayerDto(0, myName, hand = hostHand),
-                OnlinePlayerDto(1, guestName, hand = guestHand)
-            ),
+            players = listOf(hostPlayer, guestPlayer),
             currentTurnIndex = 0,
             starterPlayerIndex = 0,
+            lastCaptorIndex = -1,
             roundNumber = 1,
+            targetScore = 101,
+            isMatchOver = false,
+            matchWinnerName = null,
             statusMessage = "SPIEL GESTARTET! $myName IST AM ZUG",
+            lastPistiMessage = null,
             isGameStarted = true,
             isGuestConnected = true,
+            showRoundEndSummary = false,
             dealAnimTrigger = System.currentTimeMillis()
         )
 
         _onlineState.value = newState
         broadcastState(newState)
+        // Repeat to guarantee guest receives game start
+        scope.launch {
+            delay(150)
+            broadcastState(newState)
+        }
     }
 
     private fun processOnlineCardPlay(playerIndex: Int, cardIndex: Int) {
@@ -515,7 +527,7 @@ class OnlineManager {
 
         val newLastCaptor = if (captured) playerIndex else currentState.lastCaptorIndex
 
-        // Check sub-hands deal
+        // Check if both hands are empty
         val allHandsEmpty = updatedPlayers.all { it.hand.isEmpty() }
         var finalDeck = currentState.deck
         var finalPlayers = updatedPlayers
@@ -536,45 +548,60 @@ class OnlineManager {
             dealTriggered = true
         }
 
-        // Determine next turn
-        var nextTurn = (playerIndex + 1) % 2
-        var nextStarterIndex = currentState.starterPlayerIndex
-        var nextLastCaptor = newLastCaptor
+        val isRoundOver = allHandsEmpty && finalDeck.isEmpty()
 
-        if (dealTriggered) {
-            if (newLastCaptor in 0..1) {
-                nextTurn = newLastCaptor
-                nextStarterIndex = newLastCaptor
-                nextLastCaptor = -1
-            } else {
-                nextStarterIndex = (currentState.starterPlayerIndex + 1) % 2
-                nextTurn = nextStarterIndex
-            }
+        val nextTurn = if (isRoundOver) {
+            0
+        } else if (dealTriggered) {
+            if (newLastCaptor in 0..1) newLastCaptor else (playerIndex + 1) % 2
+        } else {
+            (playerIndex + 1) % 2
         }
 
-        val isRoundOver = finalPlayers.all { it.hand.isEmpty() } && finalDeck.isEmpty()
+        val nextStarterIndex = currentState.starterPlayerIndex
 
         currentVersion++
 
         if (isRoundOver) {
-            // Calculate final round scores including majority cards (+3)
-            val p0 = finalPlayers[0]
-            val p1 = finalPlayers[1]
+            var roundFinalPlayers = finalPlayers
+            if (newLastCaptor in 0..1 && newCenterPile.isNotEmpty()) {
+                val tablePoints = newCenterPile.sumOf { getCardPoints(it) }
+                roundFinalPlayers = roundFinalPlayers.map {
+                    if (it.id == newLastCaptor) {
+                        it.copy(
+                            capturedCount = it.capturedCount + newCenterPile.size,
+                            roundScore = it.roundScore + tablePoints
+                        )
+                    } else it
+                }
+                newCenterPile = emptyList()
+            }
 
-            val p0Extra = if (p0.capturedCount > p1.capturedCount) 3 else 0
-            val p1Extra = if (p1.capturedCount > p0.capturedCount) 3 else 0
+            // Award +3 for most cards
+            val p0Count = roundFinalPlayers[0].capturedCount
+            val p1Count = roundFinalPlayers[1].capturedCount
+            var p0Bonus = 0
+            var p1Bonus = 0
+            if (p0Count > p1Count) {
+                p0Bonus = 3
+            } else if (p1Count > p0Count) {
+                p1Bonus = 3
+            }
 
-            val ratedPlayers = finalPlayers.map { p ->
-                val extra = if (p.id == 0) p0Extra else p1Extra
+            val ratedPlayers = roundFinalPlayers.map { p ->
+                val bonus = if (p.id == 0) p0Bonus else p1Bonus
+                val totalWithBonus = p.roundScore + bonus
                 p.copy(
-                    roundScore = p.roundScore + extra,
-                    totalScore = p.totalScore + p.roundScore + extra
+                    roundScore = totalWithBonus,
+                    totalScore = p.totalScore + totalWithBonus
                 )
             }
 
-            val highestTotal = ratedPlayers.maxOf { it.totalScore }
-            val matchOver = highestTotal >= currentState.targetScore
-            val winner = if (matchOver) ratedPlayers.maxByOrNull { it.totalScore }?.name else null
+            val maxTotal = ratedPlayers.maxOf { it.totalScore }
+            val matchOver = maxTotal >= currentState.targetScore
+            val winner = if (matchOver) {
+                ratedPlayers.maxByOrNull { it.totalScore }?.name
+            } else null
 
             val finalState = currentState.copy(
                 stateVersion = currentVersion,
@@ -592,6 +619,10 @@ class OnlineManager {
             )
             _onlineState.value = finalState
             broadcastState(finalState)
+            scope.launch {
+                delay(150)
+                broadcastState(finalState)
+            }
         } else {
             val nextPlayerName = finalPlayers[nextTurn].name
             val statusMsg = if (dealTriggered) {
@@ -607,7 +638,7 @@ class OnlineManager {
                 players = finalPlayers,
                 currentTurnIndex = nextTurn,
                 starterPlayerIndex = nextStarterIndex,
-                lastCaptorIndex = nextLastCaptor,
+                lastCaptorIndex = newLastCaptor,
                 statusMessage = statusMsg,
                 lastPistiMessage = pistiNotice,
                 lastScorePoints = if (captured) (newRoundScore - player.roundScore) else 0,
@@ -618,6 +649,10 @@ class OnlineManager {
 
             _onlineState.value = updatedState
             broadcastState(updatedState)
+            scope.launch {
+                delay(120)
+                broadcastState(updatedState)
+            }
         }
     }
 
@@ -660,6 +695,10 @@ class OnlineManager {
 
         _onlineState.value = newState
         broadcastState(newState)
+        scope.launch {
+            delay(150)
+            broadcastState(newState)
+        }
     }
 
     private fun broadcastState(state: OnlineGameStateDto) {
@@ -674,17 +713,49 @@ class OnlineManager {
         )
     }
 
+    fun resyncState() {
+        val code = activeRoomCode
+        if (code.isBlank()) return
+        scope.launch(Dispatchers.IO) {
+            try {
+                val req = Request.Builder()
+                    .url("https://ntfy.sh/pisti_room_$code/json?poll=1&since=12s")
+                    .build()
+                client.newCall(req).execute().use { resp ->
+                    if (resp.isSuccessful) {
+                        val bodyText = resp.body?.string() ?: ""
+                        bodyText.lineSequence().forEach { line ->
+                            val trimmed = line.trim()
+                            if (trimmed.isNotEmpty()) {
+                                handleIncomingMessageText(trimmed)
+                            }
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e("OnlineManager", "Manual resync error: ${e.message}")
+            }
+        }
+    }
+
     fun resetLobby() {
-        webSocket?.close(1000, "Reset")
-        webSocket = null
+        joinJob?.cancel()
+        joinJob = null
+        _isJoining.value = false
+        streamJob?.cancel()
+        streamJob = null
         pollJob?.cancel()
         pollJob = null
         activeRoomCode = ""
         isHost = false
         _onlineState.value = OnlineGameStateDto()
+        _connectionStatus.value = "Bereit"
     }
 
     fun leaveRoom() {
+        joinJob?.cancel()
+        joinJob = null
+        _isJoining.value = false
         sendNetworkMessage(
             OnlineNetworkMessage(
                 type = "LEAVE_ROOM",
@@ -692,10 +763,13 @@ class OnlineManager {
                 roomCode = activeRoomCode
             )
         )
-        webSocket?.close(1000, "User Left")
+        streamJob?.cancel()
+        streamJob = null
         pollJob?.cancel()
+        pollJob = null
         _onlineState.value = OnlineGameStateDto()
         activeRoomCode = ""
+        _connectionStatus.value = "Bereit"
     }
 
     private fun getCardPoints(card: OnlineCardDto): Int {

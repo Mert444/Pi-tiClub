@@ -3,7 +3,9 @@ package com.example
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import android.content.Intent
 import android.widget.Toast
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -12,9 +14,12 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.*
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -24,9 +29,11 @@ import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -38,9 +45,13 @@ import com.example.ui.theme.*
 fun OnlineLobbyScreen(navController: NavController, gameViewModel: GameViewModel) {
     val onlineManager = gameViewModel.onlineManager
     val onlineState by onlineManager.onlineState.collectAsState()
+    val isJoining by onlineManager.isJoining.collectAsState()
+    val connectionStatus by onlineManager.connectionStatus.collectAsState()
     val state by gameViewModel.state.collectAsState()
     val context = LocalContext.current
 
+    // Tab 0 = Raum Beitreten (Join Friend), Tab 1 = Raum Erstellen (Host)
+    var selectedTab by remember { mutableStateOf(0) }
     var inputRoomCode by remember { mutableStateOf("") }
     var joinError by remember { mutableStateOf<String?>(null) }
 
@@ -68,224 +79,507 @@ fun OnlineLobbyScreen(navController: NavController, gameViewModel: GameViewModel
         Column(
             modifier = Modifier
                 .fillMaxWidth()
+                .widthIn(max = 480.dp)
                 .verticalScroll(rememberScrollState()),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
-            // Header Title
+            // Top Bar: Back button + Title
             Row(
+                modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.Center
+                horizontalArrangement = Arrangement.SpaceBetween
             ) {
-                Icon(
-                    Icons.Default.Language,
-                    contentDescription = null,
-                    tint = PrimaryYellow,
-                    modifier = Modifier.size(32.dp)
-                )
-                Spacer(modifier = Modifier.width(10.dp))
+                IconButton(
+                    onClick = {
+                        onlineManager.leaveRoom()
+                        navController.navigate("menu") {
+                            popUpTo("online_lobby") { inclusive = true }
+                        }
+                    }
+                ) {
+                    Icon(
+                        Icons.AutoMirrored.Filled.ArrowBack,
+                        contentDescription = "Zurück",
+                        tint = Color.White
+                    )
+                }
+
                 Text(
-                    text = "ONLINE LOBBY (1-GEGEN-1)",
+                    text = "ONLINE (1-GEGEN-1)",
                     color = PrimaryYellow,
-                    fontSize = 22.sp,
+                    fontSize = 20.sp,
                     fontWeight = FontWeight.ExtraBold
                 )
+
+                Spacer(modifier = Modifier.size(48.dp))
             }
 
             Text(
-                text = "Spiele nur mit deinen Freunden per Raum-Code (Keine Bots)",
+                text = "Spiele direkt mit deinen Freunden per 4-stelligem Raum-Code",
                 color = Color.White.copy(alpha = 0.85f),
                 fontSize = 13.sp,
                 textAlign = TextAlign.Center
             )
 
-            // SECTION 1: CREATE A ROOM
-            Card(
+            // Segmented Tab Control: [ Raum Beitreten ] | [ Raum Erstellen ]
+            Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .shadow(8.dp, RoundedCornerShape(16.dp)),
-                colors = CardDefaults.cardColors(containerColor = BackgroundGreen),
-                shape = RoundedCornerShape(16.dp),
-                border = androidx.compose.foundation.BorderStroke(1.5.dp, PrimaryYellow)
+                    .background(Color(0xFF042016), RoundedCornerShape(12.dp))
+                    .border(1.5.dp, PrimaryYellow.copy(alpha = 0.6f), RoundedCornerShape(12.dp))
+                    .padding(4.dp)
             ) {
-                Column(
-                    modifier = Modifier.padding(16.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally
+                // Tab 0: Raum Beitreten
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(if (selectedTab == 0) PrimaryYellow else Color.Transparent)
+                        .clickable { selectedTab = 0 }
+                        .padding(vertical = 10.dp),
+                    contentAlignment = Alignment.Center
                 ) {
-                    Text(
-                        text = "1. NEUEN RAUM ERSTELLEN",
-                        color = PrimaryYellow,
-                        fontSize = 15.sp,
-                        fontWeight = FontWeight.Bold
-                    )
-                    Spacer(modifier = Modifier.height(6.dp))
-                    Text(
-                        text = "Erstelle einen Raum-Code und sende ihn deinem Freund:",
-                        color = Color.White.copy(alpha = 0.9f),
-                        fontSize = 12.sp,
-                        textAlign = TextAlign.Center
-                    )
-
-                    Spacer(modifier = Modifier.height(12.dp))
-
-                    if (onlineState.roomCode.isEmpty()) {
-                        Button(
-                            onClick = { onlineManager.createRoom(state.playerName) },
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = PrimaryYellow,
-                                contentColor = OnPrimaryYellow
-                            ),
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(48.dp),
-                            shape = RoundedCornerShape(10.dp)
-                        ) {
-                            Icon(Icons.Default.AddCircle, contentDescription = null)
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text("Raum-Code Generieren", fontSize = 15.sp, fontWeight = FontWeight.Bold)
-                        }
-                    } else {
-                        // Display Room Code
-                        Box(
-                            modifier = Modifier
-                                .background(Color(0xFF072B1E), RoundedCornerShape(12.dp))
-                                .border(2.dp, PrimaryYellow, RoundedCornerShape(12.dp))
-                                .padding(horizontal = 24.dp, vertical = 10.dp)
-                        ) {
-                            Text(
-                                text = onlineState.roomCode,
-                                color = PrimaryYellow,
-                                fontSize = 34.sp,
-                                fontWeight = FontWeight.ExtraBold,
-                                letterSpacing = 6.sp
-                            )
-                        }
-
-                        Spacer(modifier = Modifier.height(10.dp))
-
-                        OutlinedButton(
-                            onClick = {
-                                val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                                val clip = ClipData.newPlainText("Raum Code", onlineState.roomCode)
-                                clipboard.setPrimaryClip(clip)
-                                Toast.makeText(context, "Code ${onlineState.roomCode} kopiert!", Toast.LENGTH_SHORT).show()
-                            },
-                            colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.White),
-                            border = androidx.compose.foundation.BorderStroke(1.dp, PrimaryYellow),
-                            shape = RoundedCornerShape(8.dp)
-                        ) {
-                            Icon(Icons.Default.ContentCopy, contentDescription = null, modifier = Modifier.size(16.dp))
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text("Code Kopieren", fontSize = 13.sp)
-                        }
-
-                        Spacer(modifier = Modifier.height(12.dp))
-
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.Center
-                        ) {
-                            CircularProgressIndicator(
-                                modifier = Modifier.size(18.dp),
-                                color = PrimaryYellow,
-                                strokeWidth = 2.dp
-                            )
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text(
-                                text = "Warte auf Mitspieler...",
-                                color = Color.White,
-                                fontSize = 13.sp,
-                                fontWeight = FontWeight.Medium
-                            )
-                        }
-                    }
-                }
-            }
-
-            // SECTION 2: JOIN A ROOM WITH CODE
-            Card(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .shadow(8.dp, RoundedCornerShape(16.dp)),
-                colors = CardDefaults.cardColors(containerColor = BackgroundGreen),
-                shape = RoundedCornerShape(16.dp),
-                border = androidx.compose.foundation.BorderStroke(1.5.dp, PrimaryYellow)
-            ) {
-                Column(
-                    modifier = Modifier.padding(16.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally
-                ) {
-                    Text(
-                        text = "2. RAUM CODE EINGEBEN",
-                        color = PrimaryYellow,
-                        fontSize = 15.sp,
-                        fontWeight = FontWeight.Bold
-                    )
-                    Spacer(modifier = Modifier.height(6.dp))
-                    Text(
-                        text = "Dein Freund hat einen Code? Gib ihn hier ein:",
-                        color = Color.White.copy(alpha = 0.9f),
-                        fontSize = 12.sp,
-                        textAlign = TextAlign.Center
-                    )
-
-                    Spacer(modifier = Modifier.height(12.dp))
-
-                    OutlinedTextField(
-                        value = inputRoomCode,
-                        onValueChange = {
-                            if (it.length <= 4) inputRoomCode = it.filter { char -> char.isDigit() }
-                        },
-                        label = { Text("4-stelliger Code (z.B. 4829)", color = OutlineYellow) },
-                        singleLine = true,
-                        colors = OutlinedTextFieldDefaults.colors(
-                            focusedBorderColor = PrimaryYellow,
-                            unfocusedBorderColor = OutlineYellow,
-                            focusedTextColor = Color.White,
-                            unfocusedTextColor = Color.White
-                        ),
-                        modifier = Modifier.fillMaxWidth()
-                    )
-
-                    if (joinError != null) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.Center
+                    ) {
+                        Icon(
+                            Icons.Default.GroupAdd,
+                            contentDescription = null,
+                            tint = if (selectedTab == 0) OnPrimaryYellow else Color.White,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
                         Text(
-                            text = joinError ?: "",
-                            color = MaterialTheme.colorScheme.error,
-                            fontSize = 12.sp,
-                            modifier = Modifier.padding(top = 4.dp)
+                            text = "Raum Beitreten",
+                            color = if (selectedTab == 0) OnPrimaryYellow else Color.White,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 14.sp
                         )
                     }
+                }
 
-                    Spacer(modifier = Modifier.height(12.dp))
-
-                    Button(
-                        onClick = {
-                            onlineManager.joinRoom(inputRoomCode, state.playerName) { success, msg ->
-                                if (!success) {
-                                    joinError = msg
-                                } else {
-                                    joinError = null
-                                }
-                            }
-                        },
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = PrimaryYellow,
-                            contentColor = OnPrimaryYellow
-                        ),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(48.dp),
-                        shape = RoundedCornerShape(10.dp),
-                        enabled = inputRoomCode.length == 4
+                // Tab 1: Raum Erstellen
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(if (selectedTab == 1) PrimaryYellow else Color.Transparent)
+                        .clickable { selectedTab = 1 }
+                        .padding(vertical = 10.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.Center
                     ) {
-                        Icon(Icons.Default.PlayArrow, contentDescription = null)
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text("Raum Beitreten & Spielen", fontSize = 15.sp, fontWeight = FontWeight.Bold)
+                        Icon(
+                            Icons.Default.AddCircle,
+                            contentDescription = null,
+                            tint = if (selectedTab == 1) OnPrimaryYellow else Color.White,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            text = "Raum Erstellen",
+                            color = if (selectedTab == 1) OnPrimaryYellow else Color.White,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 14.sp
+                        )
                     }
                 }
             }
 
-            // Back to Menu Button
+            // TAB 0: RAUM BEITRETEN (JOIN ROOM)
+            if (selectedTab == 0) {
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .shadow(8.dp, RoundedCornerShape(16.dp)),
+                    colors = CardDefaults.cardColors(containerColor = BackgroundGreen),
+                    shape = RoundedCornerShape(16.dp),
+                    border = androidx.compose.foundation.BorderStroke(1.5.dp, PrimaryYellow)
+                ) {
+                    Column(
+                        modifier = Modifier.padding(18.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        Text(
+                            text = "🎮 RUNDE DEINES FREUNDES BEITRETEN",
+                            color = PrimaryYellow,
+                            fontSize = 15.sp,
+                            fontWeight = FontWeight.Bold,
+                            textAlign = TextAlign.Center
+                        )
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Text(
+                            text = "Gib hier den 4-stelligen Raum-Code ein, den dir dein Freund geschickt hat:",
+                            color = Color.White.copy(alpha = 0.9f),
+                            fontSize = 12.sp,
+                            textAlign = TextAlign.Center
+                        )
+
+                        Spacer(modifier = Modifier.height(16.dp))
+
+                        if (!isJoining) {
+                            // Large 4-digit code visual display
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.Center,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                for (i in 0 until 4) {
+                                    val digit = inputRoomCode.getOrNull(i)?.toString() ?: ""
+                                    Box(
+                                        modifier = Modifier
+                                            .padding(horizontal = 4.dp)
+                                            .size(54.dp)
+                                            .background(Color(0xFF072B1E), RoundedCornerShape(10.dp))
+                                            .border(
+                                                width = if (inputRoomCode.length == i) 2.dp else 1.dp,
+                                                color = if (inputRoomCode.length == i) PrimaryYellow else OutlineYellow.copy(alpha = 0.5f),
+                                                shape = RoundedCornerShape(10.dp)
+                                            ),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Text(
+                                            text = digit,
+                                            color = PrimaryYellow,
+                                            fontSize = 26.sp,
+                                            fontWeight = FontWeight.ExtraBold
+                                        )
+                                    }
+                                }
+                            }
+
+                            Spacer(modifier = Modifier.height(12.dp))
+
+                            // Outlined text field for direct numerical entry
+                            OutlinedTextField(
+                                value = inputRoomCode,
+                                onValueChange = {
+                                    val digitsOnly = it.filter { c -> c.isDigit() }
+                                    if (digitsOnly.length <= 4) {
+                                        inputRoomCode = digitsOnly
+                                        joinError = null
+                                    }
+                                },
+                                label = { Text("4-stelligen Code eingeben", color = OutlineYellow) },
+                                singleLine = true,
+                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                                colors = OutlinedTextFieldDefaults.colors(
+                                    focusedBorderColor = PrimaryYellow,
+                                    unfocusedBorderColor = OutlineYellow,
+                                    focusedTextColor = Color.White,
+                                    unfocusedTextColor = Color.White
+                                ),
+                                modifier = Modifier.fillMaxWidth()
+                            )
+
+                            Spacer(modifier = Modifier.height(10.dp))
+
+                            // Paste from Clipboard Button
+                            OutlinedButton(
+                                onClick = {
+                                    try {
+                                        val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                                        val clipText = clipboard.primaryClip?.getItemAt(0)?.text?.toString() ?: ""
+                                        val digits = clipText.filter { it.isDigit() }.take(4)
+                                        if (digits.length == 4) {
+                                            inputRoomCode = digits
+                                            joinError = null
+                                            Toast.makeText(context, "Code $digits eingefügt!", Toast.LENGTH_SHORT).show()
+                                        } else {
+                                            Toast.makeText(context, "Kein 4-stelliger Code in Zwischenablage gefunden", Toast.LENGTH_SHORT).show()
+                                        }
+                                    } catch (e: Exception) {
+                                        Toast.makeText(context, "Konnte nicht aus Zwischenablage lesen", Toast.LENGTH_SHORT).show()
+                                    }
+                                },
+                                colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.White),
+                                border = androidx.compose.foundation.BorderStroke(1.dp, OutlineYellow),
+                                shape = RoundedCornerShape(8.dp)
+                            ) {
+                                Icon(Icons.Default.ContentPaste, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Aus Zwischenablage einfügen", fontSize = 12.sp)
+                            }
+
+                            if (joinError != null) {
+                                Spacer(modifier = Modifier.height(8.dp))
+                                Text(
+                                    text = joinError ?: "",
+                                    color = MaterialTheme.colorScheme.error,
+                                    fontSize = 12.sp,
+                                    textAlign = TextAlign.Center
+                                )
+                            }
+
+                            Spacer(modifier = Modifier.height(16.dp))
+
+                            // Main Join Button
+                            Button(
+                                onClick = {
+                                    onlineManager.joinRoom(inputRoomCode, state.playerName) { success, msg ->
+                                        if (!success) {
+                                            joinError = msg
+                                        }
+                                    }
+                                },
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = PrimaryYellow,
+                                    contentColor = OnPrimaryYellow
+                                ),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(52.dp),
+                                shape = RoundedCornerShape(12.dp),
+                                enabled = inputRoomCode.length == 4
+                            ) {
+                                Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(24.dp))
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(
+                                    text = "Runde Beitreten & Spielen",
+                                    fontSize = 16.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                        } else {
+                            // ACTIVE JOINING PROGRESS STATE
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .background(Color(0xFF072B1E), RoundedCornerShape(12.dp))
+                                    .border(1.5.dp, PrimaryYellow, RoundedCornerShape(12.dp))
+                                    .padding(16.dp),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Column(
+                                    horizontalAlignment = Alignment.CenterHorizontally,
+                                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                                ) {
+                                    CircularProgressIndicator(
+                                        color = PrimaryYellow,
+                                        strokeWidth = 3.dp,
+                                        modifier = Modifier.size(36.dp)
+                                    )
+                                    Text(
+                                        text = "Verbinde mit Raum #$inputRoomCode...",
+                                        color = PrimaryYellow,
+                                        fontSize = 16.sp,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                    Text(
+                                        text = connectionStatus,
+                                        color = Color.White.copy(alpha = 0.9f),
+                                        fontSize = 12.sp,
+                                        textAlign = TextAlign.Center
+                                    )
+                                    Text(
+                                        text = "Warte auf Antwort deines Freundes...\nSobald die Verbindung steht, startet das Spiel automatisch.",
+                                        color = Color.White.copy(alpha = 0.7f),
+                                        fontSize = 11.sp,
+                                        textAlign = TextAlign.Center
+                                    )
+
+                                    Spacer(modifier = Modifier.height(4.dp))
+
+                                    OutlinedButton(
+                                        onClick = {
+                                            onlineManager.cancelJoin()
+                                        },
+                                        colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.White),
+                                        border = androidx.compose.foundation.BorderStroke(1.dp, Color.White.copy(alpha = 0.6f)),
+                                        shape = RoundedCornerShape(8.dp)
+                                    ) {
+                                        Text("Abbrechen / Code ändern", fontSize = 12.sp)
+                                    }
+                                }
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(16.dp))
+
+                        // How it works info box
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .background(LightGreen.copy(alpha = 0.4f), RoundedCornerShape(10.dp))
+                                .padding(12.dp)
+                        ) {
+                            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                Text(
+                                    text = "💡 So einfach funktioniert's:",
+                                    color = PrimaryYellow,
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 12.sp
+                                )
+                                Text(
+                                    text = "1. Dein Freund tippt auf 'Raum Erstellen' und nennt dir den Code.",
+                                    color = Color.White.copy(alpha = 0.85f),
+                                    fontSize = 11.sp
+                                )
+                                Text(
+                                    text = "2. Du gibst den Code hier ein (oder tippst auf 'Aus Zwischenablage einfügen').",
+                                    color = Color.White.copy(alpha = 0.85f),
+                                    fontSize = 11.sp
+                                )
+                                Text(
+                                    text = "3. Tippe auf 'Beitreten' – das Spiel startet bei beiden synchron!",
+                                    color = Color.White.copy(alpha = 0.85f),
+                                    fontSize = 11.sp
+                                )
+                            }
+                        }
+                    }
+                }
+            } else {
+                // TAB 1: RAUM ERSTELLEN (CREATE ROOM / HOST)
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .shadow(8.dp, RoundedCornerShape(16.dp)),
+                    colors = CardDefaults.cardColors(containerColor = BackgroundGreen),
+                    shape = RoundedCornerShape(16.dp),
+                    border = androidx.compose.foundation.BorderStroke(1.5.dp, PrimaryYellow)
+                ) {
+                    Column(
+                        modifier = Modifier.padding(18.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        Text(
+                            text = "➕ NEUEN RAUM FÜR FREUND ERSTELLEN",
+                            color = PrimaryYellow,
+                            fontSize = 15.sp,
+                            fontWeight = FontWeight.Bold,
+                            textAlign = TextAlign.Center
+                        )
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Text(
+                            text = "Erstelle einen Raum-Code und lade deinen Freund ein:",
+                            color = Color.White.copy(alpha = 0.9f),
+                            fontSize = 12.sp,
+                            textAlign = TextAlign.Center
+                        )
+
+                        Spacer(modifier = Modifier.height(16.dp))
+
+                        if (onlineState.roomCode.isEmpty()) {
+                            Button(
+                                onClick = { onlineManager.createRoom(state.playerName) },
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = PrimaryYellow,
+                                    contentColor = OnPrimaryYellow
+                                ),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(52.dp),
+                                shape = RoundedCornerShape(12.dp)
+                            ) {
+                                Icon(Icons.Default.AddCircle, contentDescription = null)
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text("Raum-Code Generieren", fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                            }
+                        } else {
+                            // Display Room Code
+                            Box(
+                                modifier = Modifier
+                                    .background(Color(0xFF072B1E), RoundedCornerShape(12.dp))
+                                    .border(2.dp, PrimaryYellow, RoundedCornerShape(12.dp))
+                                    .padding(horizontal = 28.dp, vertical = 12.dp)
+                            ) {
+                                Text(
+                                    text = onlineState.roomCode,
+                                    color = PrimaryYellow,
+                                    fontSize = 38.sp,
+                                    fontWeight = FontWeight.ExtraBold,
+                                    letterSpacing = 8.sp
+                                )
+                            }
+
+                            Spacer(modifier = Modifier.height(12.dp))
+
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                // Share Button (WhatsApp / SMS / etc.)
+                                Button(
+                                    onClick = {
+                                        val sendIntent = Intent().apply {
+                                            action = Intent.ACTION_SEND
+                                            putExtra(Intent.EXTRA_TEXT, "Lass uns Pişti spielen! Tritt meiner Runde bei mit Raum-Code: ${onlineState.roomCode}")
+                                            type = "text/plain"
+                                        }
+                                        val shareIntent = Intent.createChooser(sendIntent, "Raum-Code teilen")
+                                        context.startActivity(shareIntent)
+                                    },
+                                    colors = ButtonDefaults.buttonColors(
+                                        containerColor = PrimaryYellow,
+                                        contentColor = OnPrimaryYellow
+                                    ),
+                                    modifier = Modifier.weight(1f).height(44.dp),
+                                    shape = RoundedCornerShape(8.dp)
+                                ) {
+                                    Icon(Icons.Default.Share, contentDescription = null, modifier = Modifier.size(16.dp))
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text("Per WhatsApp teilen", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                }
+
+                                // Copy Code Button
+                                OutlinedButton(
+                                    onClick = {
+                                        val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                                        val clip = ClipData.newPlainText("Raum Code", onlineState.roomCode)
+                                        clipboard.setPrimaryClip(clip)
+                                        Toast.makeText(context, "Code ${onlineState.roomCode} kopiert!", Toast.LENGTH_SHORT).show()
+                                    },
+                                    colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.White),
+                                    border = androidx.compose.foundation.BorderStroke(1.dp, PrimaryYellow),
+                                    modifier = Modifier.weight(1f).height(44.dp),
+                                    shape = RoundedCornerShape(8.dp)
+                                ) {
+                                    Icon(Icons.Default.ContentCopy, contentDescription = null, modifier = Modifier.size(16.dp))
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text("Kopieren", fontSize = 12.sp)
+                                }
+                            }
+
+                            Spacer(modifier = Modifier.height(14.dp))
+
+                            // Waiting indicator
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.Center
+                            ) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(18.dp),
+                                    color = PrimaryYellow,
+                                    strokeWidth = 2.dp
+                                )
+                                Spacer(modifier = Modifier.width(10.dp))
+                                Text(
+                                    text = "Warte auf Mitspieler...",
+                                    color = Color.White,
+                                    fontSize = 13.sp,
+                                    fontWeight = FontWeight.Medium
+                                )
+                            }
+
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Text(
+                                text = "Sobald dein Freund den Code bei sich eingibt, startet das Spiel für euch beide automatisch!",
+                                color = Color.White.copy(alpha = 0.7f),
+                                fontSize = 11.sp,
+                                textAlign = TextAlign.Center
+                            )
+                        }
+                    }
+                }
+            }
+
+            // Back to Main Menu Button
             TextButton(
                 onClick = {
                     onlineManager.leaveRoom()
@@ -294,7 +588,7 @@ fun OnlineLobbyScreen(navController: NavController, gameViewModel: GameViewModel
                     }
                 }
             ) {
-                Text("Zurück zum Hauptmenü", color = Color.White.copy(alpha = 0.8f))
+                Text("← Zurück zum Hauptmenü", color = Color.White.copy(alpha = 0.85f), fontSize = 14.sp)
             }
         }
     }
@@ -315,19 +609,8 @@ fun OnlineGameScreen(navController: NavController, gameViewModel: GameViewModel)
 
     val isMyTurn = onlineState.currentTurnIndex == myPlayerId
 
-    var landedCounts by remember { mutableStateOf<List<Int>?>(null) }
-    var lastProcessedTrigger by remember { mutableStateOf(0L) }
-
-    LaunchedEffect(onlineState.dealAnimTrigger) {
-        if (onlineState.dealAnimTrigger > 0L && onlineState.dealAnimTrigger != lastProcessedTrigger) {
-            lastProcessedTrigger = onlineState.dealAnimTrigger
-            landedCounts = listOf(0, 0)
-            for (c in 1..4) {
-                kotlinx.coroutines.delay(120)
-                landedCounts = listOf(c, c)
-            }
-            landedCounts = null
-        }
+    var landedCounts by remember(onlineState.dealAnimTrigger) {
+        mutableStateOf<List<Int>?>(if (onlineState.dealAnimTrigger > 0L) listOf(0, 0) else null)
     }
 
     val feltGradient = Brush.radialGradient(
@@ -373,22 +656,44 @@ fun OnlineGameScreen(navController: NavController, gameViewModel: GameViewModel)
             }
         }
 
-        // Top Right Exit Button
-        IconButton(
-            onClick = { showExitDialog = true },
+        // Top Right Actions (Sync + Exit)
+        Row(
             modifier = Modifier
                 .align(Alignment.TopEnd)
-                .padding(top = 16.dp, end = 16.dp)
-                .size(40.dp)
-                .border(1.5.dp, Color(0xFFD4AF37).copy(alpha = 0.8f), CircleShape)
-                .background(Color(0xFF072B1E), CircleShape)
+                .padding(top = 16.dp, end = 16.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            Icon(
-                Icons.Default.ExitToApp,
-                contentDescription = "Raum verlassen",
-                tint = Color.White,
-                modifier = Modifier.size(20.dp)
-            )
+            // Manual Resync Button
+            IconButton(
+                onClick = { onlineManager.resyncState() },
+                modifier = Modifier
+                    .size(40.dp)
+                    .border(1.5.dp, Color(0xFFD4AF37).copy(alpha = 0.8f), CircleShape)
+                    .background(Color(0xFF072B1E), CircleShape)
+            ) {
+                Icon(
+                    Icons.Default.Refresh,
+                    contentDescription = "Synchronisieren",
+                    tint = PrimaryYellow,
+                    modifier = Modifier.size(20.dp)
+                )
+            }
+
+            // Exit Button
+            IconButton(
+                onClick = { showExitDialog = true },
+                modifier = Modifier
+                    .size(40.dp)
+                    .border(1.5.dp, Color(0xFFD4AF37).copy(alpha = 0.8f), CircleShape)
+                    .background(Color(0xFF072B1E), CircleShape)
+            ) {
+                Icon(
+                    Icons.Default.ExitToApp,
+                    contentDescription = "Raum verlassen",
+                    tint = Color.White,
+                    modifier = Modifier.size(20.dp)
+                )
+            }
         }
 
         // --- OPPONENT PLAYER (TOP CENTER) ---
@@ -616,6 +921,14 @@ fun OnlineGameScreen(navController: NavController, gameViewModel: GameViewModel)
                 }
             }
         }
+
+        // --- 2-PLAYER ANIMATED CARD DEALING OVERLAY ---
+        OnlineCardDealAnimOverlay(
+            trigger = onlineState.dealAnimTrigger,
+            humanHand = myPlayer.hand,
+            onLandedCountsChanged = { newLanded -> landedCounts = newLanded },
+            onAnimFinished = { landedCounts = null }
+        )
     }
 
     // ROUND END SUMMARY DIALOG
@@ -841,6 +1154,153 @@ fun OnlineCardView(card: OnlineCardDto, modifier: Modifier = Modifier) {
                 fontSize = 9.sp,
                 lineHeight = 9.sp
             )
+        }
+    }
+}
+
+// --- 2-PLAYER ANIMATED CARD DEALING OVERLAY ---
+
+@Composable
+fun OnlineCardDealAnimOverlay(
+    trigger: Long,
+    humanHand: List<OnlineCardDto>,
+    onLandedCountsChanged: (List<Int>) -> Unit,
+    onAnimFinished: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    if (trigger <= 0L) return
+
+    var isAnimating by remember(trigger) { mutableStateOf(true) }
+    val animProgress = remember(trigger) { androidx.compose.animation.core.Animatable(0f) }
+
+    LaunchedEffect(trigger) {
+        isAnimating = true
+        onLandedCountsChanged(listOf(0, 0))
+        animProgress.snapTo(0f)
+        animProgress.animateTo(
+            targetValue = 1f,
+            animationSpec = tween(durationMillis = 1100, easing = LinearEasing)
+        )
+        isAnimating = false
+        onAnimFinished()
+    }
+
+    if (isAnimating) {
+        BoxWithConstraints(modifier = modifier.fillMaxSize()) {
+            val w = maxWidth.value
+            val h = maxHeight.value
+
+            val deckX = 24f
+            val deckY = 135f
+            val progress = animProgress.value
+            val totalCards = 8 // 4 to Bottom (human), 4 to Top (opponent)
+
+            val currentLanded = mutableListOf(0, 0)
+            for (i in 0 until totalCards) {
+                val pIdx = i % 2 // 0 = Bottom (Human), 1 = Top (Opponent)
+                val slot = i / 2
+                val cardStart = (i * 0.08f).coerceAtMost(0.65f)
+                val cardEnd = (cardStart + 0.35f).coerceAtMost(1f)
+
+                if (progress >= cardEnd) {
+                    if (slot + 1 > currentLanded[pIdx]) {
+                        currentLanded[pIdx] = slot + 1
+                    }
+                }
+            }
+
+            SideEffect {
+                onLandedCountsChanged(currentLanded.toList())
+            }
+
+            for (i in 0 until totalCards) {
+                val pIdx = i % 2
+                val slot = i / 2
+                val cardStart = (i * 0.08f).coerceAtMost(0.65f)
+                val cardEnd = (cardStart + 0.35f).coerceAtMost(1f)
+
+                if (progress in cardStart..cardEnd) {
+                    val cardProgress = ((progress - cardStart) / (cardEnd - cardStart)).coerceIn(0f, 1f)
+                    val eased = FastOutSlowInEasing.transform(cardProgress)
+
+                    val targetX: Float
+                    val targetY: Float
+                    val targetAngle: Float
+
+                    if (pIdx == 0) {
+                        // Human Player (Bottom)
+                        val handCount = 4
+                        val centerIndex = (handCount - 1) / 2f
+                        val xOffset = (slot - centerIndex) * 56f
+                        val dist = Math.abs(slot - centerIndex)
+                        val yOffset = dist * dist * 3f
+
+                        targetX = w * 0.5f + xOffset - 32f
+                        targetY = h - 130f - yOffset
+                        targetAngle = -10f + slot * (20f / (handCount - 1))
+                    } else {
+                        // Opponent (Top)
+                        val handCount = 4
+                        val centerIndex = (handCount - 1) / 2f
+                        val xOffset = (slot - centerIndex) * 44f
+                        targetX = w * 0.5f + xOffset - 26f
+                        targetY = 48f
+                        targetAngle = -6f + slot * 4f
+                    }
+
+                    val arcHeight = kotlin.math.sin(cardProgress * Math.PI).toFloat() * 45f
+                    val curX = deckX + (targetX - deckX) * eased
+                    val curY = deckY + (targetY - deckY) * eased - arcHeight
+
+                    if (pIdx == 0) {
+                        // 3D Flip face-up for human hand
+                        val flipAngle = cardProgress * 180f
+                        val card = humanHand.getOrNull(slot)
+                        Box(
+                            modifier = Modifier
+                                .offset(x = curX.dp, y = curY.dp)
+                                .rotate(targetAngle * cardProgress)
+                                .graphicsLayer {
+                                    rotationY = flipAngle
+                                    cameraDistance = 12f * density
+                                }
+                        ) {
+                            if (cardProgress < 0.5f) {
+                                PlaidCardBack(
+                                    modifier = Modifier
+                                        .width(64.dp)
+                                        .height(92.dp)
+                                        .shadow(6.dp, RoundedCornerShape(6.dp))
+                                )
+                            } else if (card != null) {
+                                Box(modifier = Modifier.graphicsLayer { rotationY = 180f }) {
+                                    OnlineCardView(
+                                        card = card,
+                                        modifier = Modifier
+                                            .width(64.dp)
+                                            .height(92.dp)
+                                            .shadow(6.dp, RoundedCornerShape(6.dp))
+                                    )
+                                }
+                            }
+                        }
+                    } else {
+                        // Facedown for opponent
+                        Box(
+                            modifier = Modifier
+                                .offset(x = curX.dp, y = curY.dp)
+                                .rotate(targetAngle * cardProgress)
+                        ) {
+                            PlaidCardBack(
+                                modifier = Modifier
+                                    .width(52.dp)
+                                    .height(76.dp)
+                                    .shadow(4.dp, RoundedCornerShape(6.dp))
+                            )
+                        }
+                    }
+                }
+            }
         }
     }
 }
